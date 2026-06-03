@@ -32,6 +32,159 @@ const {
     isUnknownInteractionError
 } = require('./safe');
 
+const { addOrder, removeOrder, listOrders } = require('./orderDb');
+
+function parseDateInput(raw) {
+    if (!raw) return null;
+    const s = String(raw).trim();
+    if (!s) return null;
+
+    const ms = Date.parse(s);
+    if (Number.isFinite(ms)) return ms;
+
+    // Allow unix seconds or ms.
+    if (/^\d+$/.test(s)) {
+        const n = Number(s);
+        if (!Number.isFinite(n)) return null;
+        if (n > 10_000_000_000) return n; // ms
+        return n * 1000; // seconds
+    }
+
+    return null;
+}
+
+function parseNumberInput(raw) {
+    if (raw === null || raw === undefined) return null;
+    const n = Number(raw);
+    return Number.isFinite(n) ? n : null;
+}
+
+function normalizeServiceId(raw) {
+    if (!raw) return null;
+    const s = String(raw).trim();
+    if (!s) return null;
+    return s;
+}
+
+function formatMoney(n) {
+    const num = Number(n);
+    if (!Number.isFinite(num)) return String(n);
+    return num.toFixed(2);
+}
+
+function withinRange(value, min, max) {
+    if (min !== null && min !== undefined && Number.isFinite(min) && value < min) return false;
+    if (max !== null && max !== undefined && Number.isFinite(max) && value > max) return false;
+    return true;
+}
+
+function getUserLabelFromOrders(orders, userId) {
+    if (!userId) return 'unknown';
+    const idStr = String(userId);
+
+    for (const o of orders || []) {
+        if (!o) continue;
+        if (o.userId === null || o.userId === undefined) continue;
+        if (String(o.userId) !== idStr) continue;
+
+        const candidate =
+            o.userName ||
+            o.username ||
+            o.user ||
+            o.displayName ||
+            o.discordName ||
+            o.tag ||
+            null;
+
+        if (candidate && String(candidate).trim()) {
+            return `${candidate} (${idStr})`;
+        }
+    }
+
+    return idStr;
+}
+
+function summarizeSpend(orders, userId, nowMs) {
+    const windows = [
+        { label: '24h', ms: 24 * 60 * 60 * 1000 },
+        { label: '7d', ms: 7 * 24 * 60 * 60 * 1000 },
+        { label: '30d', ms: 30 * 24 * 60 * 60 * 1000 }
+    ];
+
+    const sums = Object.fromEntries(windows.map((w) => [w.label, 0]));
+
+    for (const o of orders) {
+        if (String(o.userId) !== String(userId)) continue;
+        const createdAt = parseNumberInput(o.createdAt);
+        if (!Number.isFinite(createdAt)) continue;
+
+        const price = parseNumberInput(o.price);
+        if (!Number.isFinite(price)) continue;
+
+        for (const w of windows) {
+            if (nowMs - createdAt <= w.ms) sums[w.label] += price;
+        }
+    }
+
+    return sums;
+}
+
+function formatHistoryResponse({ filters, orders, spendSummary, allOrdersForLookups }) {
+    const lines = [];
+
+    lines.push('Purchase history');
+
+    if (filters) {
+        const f = [];
+        if (filters.userId) f.push(`user=${getUserLabelFromOrders(allOrdersForLookups || orders, filters.userId)}`);
+        if (filters.serviceId) f.push(`service=${filters.serviceId}`);
+        if (filters.minPrice !== null && filters.minPrice !== undefined) f.push(`minPrice=${filters.minPrice}`);
+        if (filters.maxPrice !== null && filters.maxPrice !== undefined) f.push(`maxPrice=${filters.maxPrice}`);
+        if (filters.fromMs) f.push(`from=${new Date(filters.fromMs).toISOString()}`);
+        if (filters.toMs) f.push(`to=${new Date(filters.toMs).toISOString()}`);
+        if (typeof filters.limit === 'number') f.push(`limit=${filters.limit}`);
+        lines.push(f.length ? `Filters: ${f.join(', ')}` : 'Filters: none');
+    }
+
+    if (spendSummary) {
+        lines.push(
+            `Total spend (user): 24h=$${formatMoney(spendSummary['24h'])}, 7d=$${formatMoney(spendSummary['7d'])}, 30d=$${formatMoney(spendSummary['30d'])}`
+        );
+    }
+
+    lines.push('');
+
+    if (!orders || orders.length === 0) {
+        lines.push('No orders found.');
+        return lines.join('\n');
+    }
+
+    const show = orders.slice(0, 25); // keep message size reasonable
+    for (const o of show) {
+        const createdAt = o.createdAt ? new Date(Number(o.createdAt)).toISOString() : 'unknown';
+        const price = o.price !== undefined && o.price !== null ? `$${formatMoney(o.price)}` : 'unknown';
+        const service = o.serviceId ? `${serviceLabelFromId(o.serviceId)} (${o.serviceId})` : 'unknown';
+
+        const userId = o.userId !== undefined && o.userId !== null ? String(o.userId) : 'unknown';
+        const userName =
+            o.userName ||
+            o.username ||
+            o.user ||
+            o.displayName ||
+            o.discordName ||
+            o.tag ||
+            'unknown';
+
+        lines.push(`- ${createdAt} | ${price} | ${service} | orderId=${o.orderId} | user=${userName} (${userId})`);
+    }
+
+    if (orders.length > show.length) {
+        lines.push(`\nShowing ${show.length} of ${orders.length} results.`);
+    }
+
+    return lines.join('\n');
+}
+
 async function handleSlashCommand(interaction) {
     if (interaction.commandName === 'ping') {
         await safeReply(interaction, { content: 'Pong!', flags: EPHEMERAL_FLAGS });
@@ -63,6 +216,120 @@ async function handleSlashCommand(interaction) {
         });
 
         await generateAndTrack(interaction, serviceId, maxPrice);
+        return;
+    }
+
+    // /history [from] [to] [service] [minprice] [maxprice] [user] [limit]
+    // /history spend [user]
+    if (interaction.commandName === 'history') {
+        const deferred = await safeDeferReply(interaction, { flags: EPHEMERAL_FLAGS });
+        if (!deferred) return;
+
+        if (typeof listOrders !== 'function') {
+            await safeEditReply(interaction, {
+                content: 'History is not available: orderDb.listOrders is missing.',
+                flags: EPHEMERAL_FLAGS
+            });
+            return;
+        }
+
+        const sub = interaction.options.getSubcommand(false);
+
+        // Subcommand: spend
+        if (sub === 'spend') {
+            const userId = interaction.options.getString('user') || interaction.user.id;
+
+            let orders = [];
+            try {
+                orders = await listOrders({});
+            } catch (e) {
+                await safeEditReply(interaction, {
+                    content: `Failed to load order history: ${e && e.message ? e.message : String(e)}`,
+                    flags: EPHEMERAL_FLAGS
+                });
+                return;
+            }
+
+            const nowMs = Date.now();
+            const sums = summarizeSpend(orders, userId, nowMs);
+            const userLabel = getUserLabelFromOrders(orders, userId);
+
+            await safeEditReply(interaction, {
+                content: formatHistoryResponse({
+                    filters: { userId: userLabel },
+                    orders: [],
+                    spendSummary: sums,
+                    allOrdersForLookups: orders
+                }),
+                flags: EPHEMERAL_FLAGS
+            });
+            return;
+        }
+
+        // Default: list orders with filters
+        const fromMs = parseDateInput(interaction.options.getString('from'));
+        const toMs = parseDateInput(interaction.options.getString('to'));
+        const serviceId = normalizeServiceId(interaction.options.getString('service'));
+        const minPrice = parseNumberInput(interaction.options.getNumber('minprice'));
+        const maxPrice = parseNumberInput(interaction.options.getNumber('maxprice'));
+        const userId = interaction.options.getString('user') || null;
+        const limitRaw = interaction.options.getInteger('limit');
+        const limit = Number.isInteger(limitRaw) ? Math.max(1, Math.min(200, limitRaw)) : 50;
+
+        let orders = [];
+        try {
+            // Expect listOrders to return objects like: { orderId, userId, serviceId, price, createdAt }
+            orders = await listOrders({});
+        } catch (e) {
+            await safeEditReply(interaction, {
+                content: `Failed to load order history: ${e && e.message ? e.message : String(e)}`,
+                flags: EPHEMERAL_FLAGS
+            });
+            return;
+        }
+
+        const filtered = orders
+            .filter((o) => {
+                if (userId && String(o.userId) !== String(userId)) return false;
+
+                if (serviceId) {
+                    if (!o.serviceId) return false;
+                    if (String(o.serviceId) !== String(serviceId)) return false;
+                }
+
+                const price = parseNumberInput(o.price);
+                if (minPrice !== null && minPrice !== undefined && Number.isFinite(minPrice)) {
+                    if (!Number.isFinite(price) || price < minPrice) return false;
+                }
+                if (maxPrice !== null && maxPrice !== undefined && Number.isFinite(maxPrice)) {
+                    if (!Number.isFinite(price) || price > maxPrice) return false;
+                }
+
+                const createdAt = parseNumberInput(o.createdAt);
+                if (fromMs && Number.isFinite(fromMs)) {
+                    if (!Number.isFinite(createdAt) || createdAt < fromMs) return false;
+                }
+                if (toMs && Number.isFinite(toMs)) {
+                    if (!Number.isFinite(createdAt) || createdAt > toMs) return false;
+                }
+
+                return true;
+            })
+            .sort((a, b) => Number(b.createdAt || 0) - Number(a.createdAt || 0))
+            .slice(0, limit);
+
+        const spendSummary = userId ? summarizeSpend(orders, userId, Date.now()) : null;
+
+        await safeEditReply(interaction, {
+            content: formatHistoryResponse({
+                filters: { fromMs, toMs, serviceId, minPrice, maxPrice, userId, limit },
+                orders: filtered,
+                spendSummary,
+                allOrdersForLookups: orders
+            }),
+            flags: EPHEMERAL_FLAGS
+        });
+        return;
     }
 }
 
@@ -71,7 +338,7 @@ async function handleServiceSelect(interaction) {
         return;
     }
 
-    const [, ownerId, maxPriceRaw] = interaction.customId.split('|');
+    const [, , maxPriceRaw] = interaction.customId.split('|');
 
     const serviceId = interaction.values[0];
     if (!isAllowedService(serviceId)) {
@@ -89,7 +356,7 @@ async function handleServiceSelect(interaction) {
 
 async function handleButton(interaction) {
     if (interaction.customId.startsWith(GENERATE_PREFIX)) {
-        const [, ownerId, serviceId, maxPriceRaw] = interaction.customId.split('|');
+        const [, , serviceId, maxPriceRaw] = interaction.customId.split('|');
 
         if (!isAllowedService(serviceId)) {
             await safeReply(interaction, { content: 'Invalid service selection.', flags: EPHEMERAL_FLAGS });
@@ -119,7 +386,8 @@ async function handleButton(interaction) {
         if (!orderInfo) {
             const smsData = await checkSms(orderId);
             const fullText = extractSmsText(smsData, null);
-            const content = `Order not found locally. Latest message:\n${fullText || 'not received yet'}${process.env.DEBUG_SMSSPOOL === '1' ? `\nRaw: ${JSON.stringify(smsData)}` : ''}`;
+            const content = `Order not found locally. Latest message:\n${fullText || 'not received yet'}${process.env.DEBUG_SMSSPOOL === '1' ? `\nRaw: ${JSON.stringify(smsData)}` : ''
+                }`;
             await safeReply(interaction, { content, flags: EPHEMERAL_FLAGS });
             return;
         }
@@ -158,6 +426,14 @@ async function handleButton(interaction) {
             } catch (e) {
                 /* ignore API errors when order not in memory */
             }
+
+            // Best-effort cleanup in DB too.
+            try {
+                await removeOrder(orderId);
+            } catch (e) {
+                /* ignore db errors */
+            }
+
             const content = `Order not found locally. Refund attempted and marked as completed.`;
             await safeReply(interaction, { content, flags: EPHEMERAL_FLAGS });
             return;
@@ -168,8 +444,27 @@ async function handleButton(interaction) {
             return;
         }
 
+        // Block refunds once an OTP/SMS has been received for this order.
+        // We treat "received" as having a non-empty lastMessage (set by refresh/poll).
+        if (orderInfo.lastMessage && String(orderInfo.lastMessage).trim().length > 0) {
+            await safeReply(interaction, {
+                content: 'Refund is disabled because an OTP/SMS has already been received for this order.',
+                flags: EPHEMERAL_FLAGS
+            });
+            return;
+        }
+
         const refundRes = await cancelSms(orderId);
         const refunded = isRefundSuccess(refundRes);
+
+        if (refunded) {
+            try {
+                await removeOrder(orderId);
+            } catch (e) {
+                /* ignore db errors */
+            }
+        }
+
         orderInfo.refunded = refunded;
         activeOrders.set(orderId, orderInfo);
 
@@ -199,6 +494,7 @@ async function generateAndTrack(interaction, serviceId, maxPrice) {
         const info = {
             orderId: String(orderId),
             userId: interaction.user.id,
+            userName: interaction.user?.username || interaction.user?.tag || null,
             serviceId,
             phone: orderData.phone || 'not returned by API',
             price: orderData.price,
@@ -209,6 +505,20 @@ async function generateAndTrack(interaction, serviceId, maxPrice) {
         };
 
         activeOrders.set(String(orderId), info);
+
+        // Persist to DB for tracking by userId/serviceId/price.
+        try {
+            await addOrder({
+                orderId: info.orderId,
+                userId: info.userId,
+                userName: info.userName,
+                serviceId: info.serviceId,
+                price: info.price,
+                createdAt: info.createdAt
+            });
+        } catch (e) {
+            console.warn('Failed to persist order to DB:', e && e.message ? e.message : String(e));
+        }
 
         await safeFollowUp(interaction, {
             content: orderMessage(info),
