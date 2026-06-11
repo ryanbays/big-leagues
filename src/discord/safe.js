@@ -1,3 +1,7 @@
+const { createLogger } = require('../logger');
+
+const logger = createLogger('discord/safe');
+
 function isAlreadyAcknowledgedError(err) {
     return Boolean(err && (err.code === 40060 || (err.rawError && err.rawError.code === 40060)));
 }
@@ -11,11 +15,11 @@ async function safeReply(interaction, payload) {
         return await interaction.reply(payload);
     } catch (err) {
         if (isUnknownInteractionError(err)) {
-            console.warn('Reply skipped because interaction expired.');
+            logger.trace('Reply skipped because interaction expired.', { customId: interaction.customId || null });
             return null;
         }
         if (isAlreadyAcknowledgedError(err)) {
-            console.warn('Reply skipped because interaction already acknowledged.');
+            logger.trace('Reply skipped because interaction already acknowledged.', { customId: interaction.customId || null });
             return null;
         }
         throw err;
@@ -27,11 +31,11 @@ async function safeUpdate(interaction, payload) {
         return await interaction.update(payload);
     } catch (err) {
         if (isUnknownInteractionError(err)) {
-            console.warn('Update skipped because interaction expired.');
+            logger.trace('Update skipped because interaction expired.', { customId: interaction.customId || null });
             return null;
         }
         if (isAlreadyAcknowledgedError(err)) {
-            console.warn('Update skipped because interaction already acknowledged.');
+            logger.trace('Update skipped because interaction already acknowledged.', { customId: interaction.customId || null });
             return null;
         }
         throw err;
@@ -43,11 +47,11 @@ async function safeFollowUp(interaction, payload) {
         return await interaction.followUp(payload);
     } catch (err) {
         if (isUnknownInteractionError(err)) {
-            console.warn('Follow-up skipped because interaction expired.');
+            logger.trace('Follow-up skipped because interaction expired.', { customId: interaction.customId || null });
             return null;
         }
         if (isAlreadyAcknowledgedError(err)) {
-            console.warn('Follow-up skipped because interaction already acknowledged.');
+            logger.trace('Follow-up skipped because interaction already acknowledged.', { customId: interaction.customId || null });
             return null;
         }
         throw err;
@@ -59,11 +63,11 @@ async function safeEditReply(interaction, payload) {
         return await interaction.editReply(payload);
     } catch (err) {
         if (isUnknownInteractionError(err)) {
-            console.warn('Edit reply skipped because interaction expired.');
+            logger.trace('Edit reply skipped because interaction expired.', { customId: interaction.customId || null });
             return null;
         }
         if (isAlreadyAcknowledgedError(err)) {
-            console.warn('Edit reply skipped because interaction already acknowledged.');
+            logger.trace('Edit reply skipped because interaction already acknowledged.', { customId: interaction.customId || null });
             return null;
         }
         throw err;
@@ -76,11 +80,28 @@ async function safeDeferReply(interaction, payload) {
         return true;
     } catch (err) {
         if (isUnknownInteractionError(err)) {
-            console.warn('Defer skipped because interaction expired.');
+            logger.trace('Defer skipped because interaction expired.', { customId: interaction.customId || null, err: err && err.message ? err.message : String(err) });
             return false;
         }
         if (isAlreadyAcknowledgedError(err)) {
-            console.warn('Defer skipped because interaction already acknowledged.');
+            logger.trace('Defer skipped because interaction already acknowledged.', { customId: interaction.customId || null });
+            return false;
+        }
+        throw err;
+    }
+}
+
+async function safeDeferUpdate(interaction) {
+    try {
+        await interaction.deferUpdate();
+        return true;
+    } catch (err) {
+        if (isUnknownInteractionError(err)) {
+            logger.trace('Defer update skipped because interaction expired.', { customId: interaction.customId || null, err: err && err.message ? err.message : String(err) });
+            return false;
+        }
+        if (isAlreadyAcknowledgedError(err)) {
+            logger.trace('Defer update skipped because interaction already acknowledged.', { customId: interaction.customId || null });
             return false;
         }
         throw err;
@@ -94,5 +115,6 @@ module.exports = {
     safeUpdate,
     safeFollowUp,
     safeEditReply,
-    safeDeferReply
+    safeDeferReply,
+    safeDeferUpdate
 };

@@ -1,9 +1,12 @@
 const axios = require('axios');
 
 const { SMSPOOL_API_KEY } = require('../env');
+const { createLogger } = require('../logger');
 const {
     UK_COUNTRY
 } = require('../constants');
+
+const logger = createLogger('smspool/client');
 
 const axiosInstance = axios.create({
     baseURL: 'https://api.smspool.net',
@@ -11,6 +14,12 @@ const axiosInstance = axios.create({
 });
 
 async function buySmsNumber({ serviceId, maxPrice }) {
+    logger.debug('Submitting SMS purchase request.', {
+        serviceId,
+        maxPrice: maxPrice ?? null,
+        country: UK_COUNTRY
+    });
+
     const form = new URLSearchParams();
     form.append('key', SMSPOOL_API_KEY);
     form.append('country', UK_COUNTRY);
@@ -26,13 +35,25 @@ async function buySmsNumber({ serviceId, maxPrice }) {
 
     const normalized = normalizeOrderResponse(res.data);
     if (!normalized.id) {
+        logger.error('Unexpected SMS purchase response shape.', {
+            serviceId,
+            response: res.data
+        });
         throw new Error(`Unexpected response format from /purchase/sms: ${JSON.stringify(res.data)}`);
     }
+
+    logger.info('SMS purchase request accepted.', {
+        serviceId,
+        orderId: normalized.id,
+        price: normalized.price ?? null
+    });
 
     return normalized;
 }
 
 async function checkSms(orderId) {
+    logger.trace('Checking SMS order.', { orderId: String(orderId) });
+
     const activeData = await checkSmsFromActive(orderId);
     if (activeData) {
         return activeData;
@@ -50,19 +71,23 @@ async function checkSmsFromActive(orderId) {
             headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
         });
 
-        if (process.env.DEBUG_SMSSPOOL === '1') {
-            try {
-                console.debug('[SMSPOOL][request/active] payload for order', orderId, JSON.stringify(res.data).slice(0, 1000));
-            } catch (e) {
-                /* ignore stringify errors */
-            }
-        }
+        logger.trace('Received active order payload.', {
+            orderId: String(orderId),
+            payloadPreview: safePreview(res.data)
+        });
 
         const match = findOrderInActivePayload(res.data, String(orderId));
+        logger.debug('Active order lookup completed.', {
+            orderId: String(orderId),
+            matched: Boolean(match)
+        });
         return match || null;
     } catch (err) {
         const message = err && err.message ? err.message : String(err);
-        console.warn(`Active order check failed: ${message}`);
+        logger.warn('Active order check failed.', {
+            orderId: String(orderId),
+            error: message
+        });
         return null;
     }
 }
@@ -76,13 +101,10 @@ async function checkSmsDirect(orderId) {
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
     });
 
-    if (process.env.DEBUG_SMSSPOOL === '1') {
-        try {
-            console.debug('[SMSPOOL][sms/check] payload for order', orderId, JSON.stringify(res.data).slice(0, 1000));
-        } catch (e) {
-            /* ignore */
-        }
-    }
+    logger.trace('Received direct SMS payload.', {
+        orderId: String(orderId),
+        payloadPreview: safePreview(res.data)
+    });
 
     return res.data;
 }
@@ -125,6 +147,10 @@ async function cancelSms(orderId) {
         });
         return normalizeApiResponse(res.data);
     } catch (err) {
+        logger.warn('SMS cancel request failed, falling back to error object.', {
+            orderId: String(orderId),
+            error: err && err.message ? err.message : String(err)
+        });
         const resp = err && err.response && err.response.data ? err.response.data : null;
         if (resp) return normalizeApiResponse(resp);
         const message = err && err.message ? err.message : String(err);
@@ -195,6 +221,15 @@ function normalizeOrderResponse(data) {
         price,
         raw: data
     };
+}
+
+function safePreview(payload) {
+    try {
+        const text = typeof payload === 'string' ? payload : JSON.stringify(payload);
+        return String(text).slice(0, 1000);
+    } catch (err) {
+        return '[unserializable payload]';
+    }
 }
 
 function sameOrder(obj, orderId) {

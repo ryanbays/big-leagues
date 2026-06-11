@@ -19,6 +19,12 @@ const commands = [
         ]
     },
     {
+        name: 'promopanel',
+        description: 'Open promo code panel with API-backed services',
+        default_member_permissions: '32',
+        options: []
+    },
+    {
         name: 'buyuk',
         description: 'Direct buy UK number and check OTP',
         default_member_permissions: '32',

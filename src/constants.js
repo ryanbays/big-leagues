@@ -24,6 +24,8 @@ const SERVICE_OPTIONS = [
 
 const SELECT_PREFIX = 'svc_select';
 const GENERATE_PREFIX = 'generate';
+const PROMO_SELECT_PREFIX = 'promo_select';
+const PROMO_FETCH_PREFIX = 'promo_fetch';
 const REFRESH_PREFIX = 'refresh';
 const REFUND_PREFIX = 'refund';
 const EPHEMERAL_FLAGS = MessageFlags.Ephemeral;
@@ -36,6 +38,8 @@ module.exports = {
     SERVICE_OPTIONS,
     SELECT_PREFIX,
     GENERATE_PREFIX,
+    PROMO_SELECT_PREFIX,
+    PROMO_FETCH_PREFIX,
     REFRESH_PREFIX,
     REFUND_PREFIX,
     EPHEMERAL_FLAGS

@@ -4,22 +4,29 @@ const {
     SERVICES,
     SELECT_PREFIX,
     GENERATE_PREFIX,
+    PROMO_SELECT_PREFIX,
+    PROMO_FETCH_PREFIX,
     REFRESH_PREFIX,
     REFUND_PREFIX,
     EPHEMERAL_FLAGS
 } = require('../constants');
 
 const { activeOrders } = require('../state');
+const { createLogger } = require('../logger');
 const { isAllowedService, serviceLabelFromId } = require('../serviceUtils');
 const { buySmsNumber, checkSms, cancelSms } = require('../smspool/client');
 const { extractSmsText, isRefundSuccess } = require('../smspool/parsing');
+const { fetchPromoServices, fetchPromoCode } = require('./promo');
 
 const {
     panelHeader,
     panelComponents,
+    promoPanelHeader,
+    promoPanelComponents,
     orderActionComponents,
     orderMessage,
     formatCopyFriendly,
+    formatPromoCopyFriendly,
     formatRefundResponse
 } = require('./ui');
 
@@ -29,10 +36,13 @@ const {
     safeFollowUp,
     safeEditReply,
     safeDeferReply,
+    safeDeferUpdate,
     isUnknownInteractionError
 } = require('./safe');
 
 const { addOrder, removeOrder, listOrders } = require('./orderDb');
+
+const logger = createLogger('discord/handlers');
 
 function parseDateInput(raw) {
     if (!raw) return null;
@@ -129,6 +139,24 @@ function summarizeSpend(orders, userId, nowMs) {
     return sums;
 }
 
+function formatSpendSummaryResponse({ userLabel, spendSummary, userOrders }) {
+    text = [
+        'Purchase history',
+        `User: ${userLabel || 'unknown'}`,
+        `Total spend (user): 24h=$${formatMoney(spendSummary['24h'])}, 7d=$${formatMoney(spendSummary['7d'])}, 30d=$${formatMoney(spendSummary['30d'])}`
+    ].join('\n');
+    const recentOrders = (userOrders || []).sort((a, b) => Number(b.createdAt || 0) - Number(a.createdAt || 0)).slice(0, 5);
+    if (recentOrders.length) {
+        text += '\n\nRecent orders:\n' + recentOrders.map((o) => {
+            const createdAt = o.createdAt ? new Date(Number(o.createdAt)).toLocaleString() : 'unknown';
+            const price = o.price !== undefined && o.price !== null ? `$${formatMoney(o.price)}` : 'unknown';
+            const service = o.serviceId ? `${serviceLabelFromId(o.serviceId)} (${o.serviceId})` : 'unknown';
+            return `- ${createdAt} | ${price} | ${service} | orderId=${o.orderId}`;
+        }).join('\n');
+    }
+    return text;
+}
+
 function formatHistoryResponse({ filters, orders, spendSummary, allOrdersForLookups }) {
     const lines = [];
 
@@ -140,8 +168,8 @@ function formatHistoryResponse({ filters, orders, spendSummary, allOrdersForLook
         if (filters.serviceId) f.push(`service=${filters.serviceId}`);
         if (filters.minPrice !== null && filters.minPrice !== undefined) f.push(`minPrice=${filters.minPrice}`);
         if (filters.maxPrice !== null && filters.maxPrice !== undefined) f.push(`maxPrice=${filters.maxPrice}`);
-        if (filters.fromMs) f.push(`from=${new Date(filters.fromMs).toISOString()}`);
-        if (filters.toMs) f.push(`to=${new Date(filters.toMs).toISOString()}`);
+        if (filters.fromMs) f.push(`from=${new Date(filters.fromMs).toLocaleString()}`);
+        if (filters.toMs) f.push(`to=${new Date(filters.toMs).toLocaleString()}`);
         if (typeof filters.limit === 'number') f.push(`limit=${filters.limit}`);
         lines.push(f.length ? `Filters: ${f.join(', ')}` : 'Filters: none');
     }
@@ -161,7 +189,7 @@ function formatHistoryResponse({ filters, orders, spendSummary, allOrdersForLook
 
     const show = orders.slice(0, 25); // keep message size reasonable
     for (const o of show) {
-        const createdAt = o.createdAt ? new Date(Number(o.createdAt)).toISOString() : 'unknown';
+        const createdAt = o.createdAt ? new Date(Number(o.createdAt)).toLocaleString() : 'unknown';
         const price = o.price !== undefined && o.price !== null ? `$${formatMoney(o.price)}` : 'unknown';
         const service = o.serviceId ? `${serviceLabelFromId(o.serviceId)} (${o.serviceId})` : 'unknown';
 
@@ -186,6 +214,11 @@ function formatHistoryResponse({ filters, orders, spendSummary, allOrdersForLook
 }
 
 async function handleSlashCommand(interaction) {
+    logger.debug('Handling slash command.', {
+        commandName: interaction.commandName,
+        userId: interaction.user?.id || null
+    });
+
     if (interaction.commandName === 'ping') {
         await safeReply(interaction, { content: 'Pong!', flags: EPHEMERAL_FLAGS });
         return;
@@ -195,9 +228,56 @@ async function handleSlashCommand(interaction) {
         const maxPrice = interaction.options.getNumber('maxprice');
         const defaultServiceId = SERVICES.uberPostmates.id;
 
+        logger.trace('Opening SMS panel.', {
+            userId: interaction.user.id,
+            maxPrice,
+            defaultServiceId
+        });
+
         await safeReply(interaction, {
             content: panelHeader(defaultServiceId, maxPrice),
             components: panelComponents(interaction.user.id, defaultServiceId, maxPrice)
+        });
+        return;
+    }
+
+    if (interaction.commandName === 'promopanel') {
+        logger.trace('Opening promo panel.', { userId: interaction.user.id });
+
+        const deferred = await safeDeferReply(interaction);
+        if (!deferred) {
+            return;
+        }
+
+        let promoServices = [];
+        try {
+            promoServices = await fetchPromoServices({
+                userId: interaction.user.id,
+                interaction
+            });
+        } catch (err) {
+            const message = err && err.message ? err.message : String(err);
+            await safeEditReply(interaction, { content: `Failed to load promo services: ${message}` });
+            return;
+        }
+
+        if (!Array.isArray(promoServices) || promoServices.length === 0) {
+            logger.warn('Promo service API returned no usable services.', { userId: interaction.user.id });
+            await safeEditReply(interaction, { content: 'No promo services returned by the API.' });
+            return;
+        }
+
+        logger.debug('Promo services loaded.', {
+            userId: interaction.user.id,
+            serviceCount: promoServices.length
+        });
+
+        const defaultService = promoServices[0];
+        const defaultServiceId = String(defaultService?.value ?? defaultService?.id ?? defaultService?.serviceId ?? defaultService?.service_id ?? defaultService?.code ?? defaultService?.key ?? '');
+
+        await safeEditReply(interaction, {
+            content: promoPanelHeader(defaultService?.label ?? defaultServiceId),
+            components: promoPanelComponents(interaction.user.id, promoServices, defaultServiceId)
         });
         return;
     }
@@ -241,7 +321,7 @@ async function handleSlashCommand(interaction) {
 
             let orders = [];
             try {
-                orders = await listOrders({});
+                orders = await listOrders();
             } catch (e) {
                 await safeEditReply(interaction, {
                     content: `Failed to load order history: ${e && e.message ? e.message : String(e)}`,
@@ -253,14 +333,10 @@ async function handleSlashCommand(interaction) {
             const nowMs = Date.now();
             const sums = summarizeSpend(orders, userId, nowMs);
             const userLabel = getUserLabelFromOrders(orders, userId);
+            const userOrders = orders.filter((o) => String(o.userId) === String(userId));
 
             await safeEditReply(interaction, {
-                content: formatHistoryResponse({
-                    filters: { userId: userLabel },
-                    orders: [],
-                    spendSummary: sums,
-                    allOrdersForLookups: orders
-                }),
+                content: formatSpendSummaryResponse({ userLabel, spendSummary: sums, userOrders }),
                 flags: EPHEMERAL_FLAGS
             });
             return;
@@ -279,7 +355,7 @@ async function handleSlashCommand(interaction) {
         let orders = [];
         try {
             // Expect listOrders to return objects like: { orderId, userId, serviceId, price, createdAt }
-            orders = await listOrders({});
+            orders = await listOrders();
         } catch (e) {
             await safeEditReply(interaction, {
                 content: `Failed to load order history: ${e && e.message ? e.message : String(e)}`,
@@ -335,6 +411,44 @@ async function handleSlashCommand(interaction) {
 
 async function handleServiceSelect(interaction) {
     if (!interaction.customId.startsWith(SELECT_PREFIX)) {
+        if (!interaction.customId.startsWith(PROMO_SELECT_PREFIX)) {
+            return;
+        }
+    }
+
+    if (interaction.customId.startsWith(PROMO_SELECT_PREFIX)) {
+        logger.trace('Promo service selection changed.', {
+            userId: interaction.user.id,
+            selectedServiceId: interaction.values[0]
+        });
+
+        const deferred = await safeDeferUpdate(interaction);
+        if (!deferred) {
+            return;
+        }
+
+        let promoServices = [];
+        try {
+            promoServices = await fetchPromoServices({
+                userId: interaction.user.id,
+                interaction
+            });
+        } catch (err) {
+            const message = err && err.message ? err.message : String(err);
+            await safeEditReply(interaction, { content: `Failed to load promo services: ${message}` });
+            return;
+        }
+
+        const selectedServiceId = interaction.values[0];
+        const selectedService = promoServices.find((service) => {
+            const value = service && (service.value ?? service.id ?? service.serviceId ?? service.service_id ?? service.code ?? service.key);
+            return String(value) === String(selectedServiceId);
+        });
+
+        await safeEditReply(interaction, {
+            content: promoPanelHeader(selectedService?.label ?? selectedServiceId),
+            components: promoPanelComponents(interaction.user.id, promoServices, selectedServiceId)
+        });
         return;
     }
 
@@ -342,11 +456,21 @@ async function handleServiceSelect(interaction) {
 
     const serviceId = interaction.values[0];
     if (!isAllowedService(serviceId)) {
+        logger.warn('Invalid service selection rejected.', {
+            userId: interaction.user.id,
+            serviceId
+        });
         await safeReply(interaction, { content: 'Invalid service selection.', flags: EPHEMERAL_FLAGS });
         return;
     }
 
     const maxPrice = maxPriceRaw ? Number(maxPriceRaw) : null;
+
+    logger.trace('SMS service selection changed.', {
+        userId: interaction.user.id,
+        serviceId,
+        maxPrice: Number.isFinite(maxPrice) ? maxPrice : null
+    });
 
     await safeUpdate(interaction, {
         content: panelHeader(serviceId, Number.isFinite(maxPrice) ? maxPrice : null),
@@ -359,6 +483,10 @@ async function handleButton(interaction) {
         const [, , serviceId, maxPriceRaw] = interaction.customId.split('|');
 
         if (!isAllowedService(serviceId)) {
+            logger.warn('Invalid generate request rejected.', {
+                userId: interaction.user.id,
+                serviceId
+            });
             await safeReply(interaction, { content: 'Invalid service selection.', flags: EPHEMERAL_FLAGS });
             return;
         }
@@ -370,7 +498,49 @@ async function handleButton(interaction) {
             return;
         }
 
+        logger.info('Generating SMS number.', {
+            userId: interaction.user.id,
+            serviceId,
+            maxPrice: Number.isFinite(maxPrice) ? maxPrice : null
+        });
+
         await generateAndTrack(interaction, serviceId, Number.isFinite(maxPrice) ? maxPrice : null);
+        return;
+    }
+
+    if (interaction.customId.startsWith(PROMO_FETCH_PREFIX)) {
+        const [, , serviceId] = interaction.customId.split('|');
+
+        logger.info('Fetching promo code.', {
+            userId: interaction.user.id,
+            serviceId
+        });
+
+        const deferred = await safeDeferReply(interaction, { flags: EPHEMERAL_FLAGS });
+        if (!deferred) {
+            return;
+        }
+
+        const promoCode = await fetchPromoCode({
+            userId: interaction.user.id,
+            serviceId,
+            interaction
+        });
+
+        const content = promoCode
+            ? `Promo code:\n${formatPromoCopyFriendly(promoCode)}`
+            : 'No promo code returned by API.';
+
+        logger.debug('Promo code fetch completed.', {
+            userId: interaction.user.id,
+            serviceId,
+            hasCode: Boolean(promoCode)
+        });
+
+        await safeFollowUp(interaction, {
+            content,
+            flags: EPHEMERAL_FLAGS
+        });
         return;
     }
 
@@ -381,6 +551,11 @@ async function handleButton(interaction) {
             await safeReply(interaction, { content: 'This button belongs to another user.', flags: EPHEMERAL_FLAGS });
             return;
         }
+
+        logger.trace('Refresh SMS requested.', {
+            userId: interaction.user.id,
+            orderId
+        });
 
         const orderInfo = activeOrders.get(orderId);
         if (!orderInfo) {
@@ -418,6 +593,11 @@ async function handleButton(interaction) {
             await safeReply(interaction, { content: 'This button belongs to another user.', flags: EPHEMERAL_FLAGS });
             return;
         }
+
+        logger.trace('Refund requested.', {
+            userId: interaction.user.id,
+            orderId
+        });
 
         const orderInfo = activeOrders.get(orderId);
         if (!orderInfo) {
@@ -480,16 +660,34 @@ async function handleButton(interaction) {
 
 async function generateAndTrack(interaction, serviceId, maxPrice) {
     try {
+        logger.debug('Starting SMS purchase request.', {
+            userId: interaction.user.id,
+            serviceId,
+            maxPrice: Number.isFinite(maxPrice) ? maxPrice : null
+        });
+
         const orderData = await buySmsNumber({ serviceId, maxPrice });
         const orderId = orderData.id;
 
         if (!orderId) {
+            logger.warn('SMS purchase succeeded without an order id.', {
+                userId: interaction.user.id,
+                serviceId,
+                raw: orderData.raw
+            });
             await safeFollowUp(interaction, {
                 content: `Purchase succeeded but order ID missing. Raw: ${JSON.stringify(orderData.raw)}`,
                 flags: EPHEMERAL_FLAGS
             });
             return;
         }
+
+        logger.info('SMS purchase completed.', {
+            userId: interaction.user.id,
+            orderId: String(orderId),
+            serviceId,
+            price: orderData.price ?? null
+        });
 
         const info = {
             orderId: String(orderId),
@@ -517,7 +715,7 @@ async function generateAndTrack(interaction, serviceId, maxPrice) {
                 createdAt: info.createdAt
             });
         } catch (e) {
-            console.warn('Failed to persist order to DB:', e && e.message ? e.message : String(e));
+            logger.warn('Failed to persist order to DB.', e);
         }
 
         await safeFollowUp(interaction, {
@@ -534,6 +732,12 @@ async function generateAndTrack(interaction, serviceId, maxPrice) {
         });
     } catch (err) {
         const msg = err && err.message ? err.message : String(err);
+        logger.error('SMS purchase failed.', {
+            userId: interaction.user.id,
+            serviceId,
+            maxPrice,
+            error: msg
+        });
         await safeFollowUp(interaction, { content: `Purchase failed: ${msg}`, flags: EPHEMERAL_FLAGS });
     }
 }
@@ -544,6 +748,10 @@ async function pollAndPushUpdates(interaction, orderInfo) {
     while (Date.now() - started < OTP_TIMEOUT_MS) {
         const current = activeOrders.get(orderInfo.orderId);
         if (!current || current.refunded) {
+            logger.trace('Stopping OTP poll for inactive order.', {
+                orderId: orderInfo.orderId,
+                refunded: current ? current.refunded : null
+            });
             return;
         }
 
@@ -552,6 +760,10 @@ async function pollAndPushUpdates(interaction, orderInfo) {
             const fullText = extractSmsText(smsData, orderInfo);
 
             if (fullText && fullText !== current.lastMessage) {
+                logger.info('New SMS message detected for order.', {
+                    orderId: orderInfo.orderId,
+                    userId: orderInfo.userId
+                });
                 current.lastMessage = fullText;
                 activeOrders.set(orderInfo.orderId, current);
                 const rawPart = process.env.DEBUG_SMSSPOOL === '1' ? `\nRaw SMS payload: ${JSON.stringify(smsData)}` : '';
@@ -563,7 +775,10 @@ async function pollAndPushUpdates(interaction, orderInfo) {
             }
         } catch (err) {
             const message = err && err.message ? err.message : String(err);
-            console.warn(`Auto-poll failed for order ${orderInfo.orderId}: ${message}`);
+            logger.debug('Auto-poll failed for order.', {
+                orderId: orderInfo.orderId,
+                error: message
+            });
         }
 
         await new Promise((resolve) => setTimeout(resolve, OTP_POLL_INTERVAL_MS));
@@ -571,6 +786,10 @@ async function pollAndPushUpdates(interaction, orderInfo) {
 
     const current = activeOrders.get(orderInfo.orderId);
     if (current && !current.refunded) {
+        logger.debug('OTP poll timed out without a message.', {
+            orderId: orderInfo.orderId,
+            userId: orderInfo.userId
+        });
         await interaction.followUp({
             content: `No OTP yet for order ${orderInfo.orderId}. Use Refresh SMS button to check again or Refund to cancel.`,
             flags: EPHEMERAL_FLAGS
@@ -581,18 +800,28 @@ async function pollAndPushUpdates(interaction, orderInfo) {
 async function sendNumberMessage(interaction, phone) {
     if (!phone) return null;
     try {
+        logger.trace('Sending copy-friendly phone follow-up.', {
+            userId: interaction.user?.id || null
+        });
         return await safeFollowUp(interaction, {
             content: formatCopyFriendly(phone),
             flags: EPHEMERAL_FLAGS
         });
     } catch (err) {
-        console.warn('Failed to send number follow-up:', err && err.message ? err.message : String(err));
+        logger.warn('Failed to send number follow-up.', err);
         return null;
     }
 }
 
 async function handleInteraction(interaction) {
     try {
+        logger.trace('Routing interaction.', {
+            type: interaction.isChatInputCommand() ? 'chat_input_command' : interaction.isStringSelectMenu() ? 'string_select_menu' : interaction.isButton() ? 'button' : 'other',
+            userId: interaction.user?.id || null,
+            commandName: interaction.commandName || null,
+            customId: interaction.customId || null
+        });
+
         if (interaction.isChatInputCommand()) {
             await handleSlashCommand(interaction);
             return;
@@ -608,10 +837,10 @@ async function handleInteraction(interaction) {
         }
     } catch (err) {
         if (isUnknownInteractionError(err)) {
-            console.warn('Ignored expired interaction.');
+            logger.trace('Ignored expired interaction.', { customId: interaction.customId || null });
             return;
         }
-        console.error('Interaction handler error:', err);
+        logger.error('Interaction handler error.', err);
     }
 }
 
