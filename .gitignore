@@ -3,3 +3,4 @@ data/
 node_modules/
 orders.db
 package-lock.json
+.vscode/

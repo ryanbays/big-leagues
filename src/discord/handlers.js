@@ -43,6 +43,7 @@ const {
 const { addOrder, removeOrder, listOrders } = require('./orderDb');
 
 const logger = createLogger('discord/handlers');
+const assert = require('assert').strict;
 
 function parseDateInput(raw) {
     if (!raw) return null;
@@ -226,6 +227,7 @@ async function handleSlashCommand(interaction) {
 
     if (interaction.commandName === 'panel') {
         const maxPrice = interaction.options.getNumber('maxprice');
+        assert(maxPrice !== null && maxPrice !== undefined && Number.isFinite(maxPrice), 'Invalid maxprice input'); // should be guaranteed by command definition
         const defaultServiceId = SERVICES.uberPostmates.id;
 
         logger.trace('Opening SMS panel.', {
