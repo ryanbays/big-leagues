@@ -2,9 +2,12 @@ const {
     OTP_TIMEOUT_MS,
     OTP_POLL_INTERVAL_MS,
     SERVICES,
-    SELECT_PREFIX,
-    GENERATE_PREFIX,
+    OPEN_SMS_PANEL_PREFIX,
+    SMS_SELECT_PREFIX,
+    SMS_GENERATE_PREFIX,
+    OPEN_PROMO_PANEL_PREFIX,
     PROMO_SELECT_PREFIX,
+
     PROMO_FETCH_PREFIX,
     REFRESH_PREFIX,
     REFUND_PREFIX,
@@ -19,14 +22,17 @@ const { extractSmsText, isRefundSuccess } = require('../smspool/parsing');
 const { fetchPromoServices, fetchPromoCode } = require('./promo');
 
 const {
-    panelHeader,
-    panelComponents,
+    smsPanelGeneratorHeader,
+    smsPanelGeneratorComponents,
+    smsPanelHeader,
+    smsPanelComponents,
+    promoPanelGeneratorHeader,
+    promoPanelGeneratorComponents,
     promoPanelHeader,
     promoPanelComponents,
     orderActionComponents,
     orderMessage,
     formatCopyFriendly,
-    formatPromoCopyFriendly,
     formatRefundResponse
 } = require('./ui');
 
@@ -225,61 +231,33 @@ async function handleSlashCommand(interaction) {
         return;
     }
 
-    if (interaction.commandName === 'panel') {
+    if (interaction.commandName === 'smspanel') {
         const maxPrice = interaction.options.getNumber('maxprice');
         assert(maxPrice !== null && maxPrice !== undefined && Number.isFinite(maxPrice), 'Invalid maxprice input'); // should be guaranteed by command definition
-        const defaultServiceId = SERVICES.uberPostmates.id;
 
-        logger.trace('Opening SMS panel.', {
+        logger.trace('Posting SMS panel generator.', {
             userId: interaction.user.id,
-            maxPrice,
-            defaultServiceId
+            maxPrice
         });
 
+        // Post a shared generator message. The admin's options (e.g. max price)
+        // are baked into the button; each user who clicks it gets their own
+        // ephemeral panel that inherits those options.
         await safeReply(interaction, {
-            content: panelHeader(defaultServiceId, maxPrice),
-            components: panelComponents(interaction.user.id, defaultServiceId, maxPrice)
+            content: smsPanelGeneratorHeader(maxPrice),
+            components: smsPanelGeneratorComponents(maxPrice)
         });
         return;
     }
 
     if (interaction.commandName === 'promopanel') {
-        logger.trace('Opening promo panel.', { userId: interaction.user.id });
+        logger.trace('Posting promo panel generator.', { userId: interaction.user.id });
 
-        const deferred = await safeDeferReply(interaction);
-        if (!deferred) {
-            return;
-        }
-
-        let promoServices = [];
-        try {
-            promoServices = await fetchPromoServices({
-                userId: interaction.user.id,
-                interaction
-            });
-        } catch (err) {
-            const message = err && err.message ? err.message : String(err);
-            await safeEditReply(interaction, { content: `Failed to load promo services: ${message}` });
-            return;
-        }
-
-        if (!Array.isArray(promoServices) || promoServices.length === 0) {
-            logger.warn('Promo service API returned no usable services.', { userId: interaction.user.id });
-            await safeEditReply(interaction, { content: 'No promo services returned by the API.' });
-            return;
-        }
-
-        logger.debug('Promo services loaded.', {
-            userId: interaction.user.id,
-            serviceCount: promoServices.length
-        });
-
-        const defaultService = promoServices[0];
-        const defaultServiceId = String(defaultService?.value ?? defaultService?.id ?? defaultService?.serviceId ?? defaultService?.service_id ?? defaultService?.code ?? defaultService?.key ?? '');
-
-        await safeEditReply(interaction, {
-            content: promoPanelHeader(defaultService?.label ?? defaultServiceId),
-            components: promoPanelComponents(interaction.user.id, promoServices, defaultServiceId)
+        // Post a shared generator message; each user who clicks the button gets
+        // their own ephemeral promo panel.
+        await safeReply(interaction, {
+            content: promoPanelGeneratorHeader(),
+            components: promoPanelGeneratorComponents()
         });
         return;
     }
@@ -297,7 +275,7 @@ async function handleSlashCommand(interaction) {
             content: `Generating UK number for ${serviceLabelFromId(serviceId)} (${serviceId})...`
         });
 
-        await generateAndTrack(interaction, serviceId, maxPrice);
+        await generateSMSAndTrack(interaction, serviceId, maxPrice);
         return;
     }
 
@@ -412,7 +390,7 @@ async function handleSlashCommand(interaction) {
 }
 
 async function handleServiceSelect(interaction) {
-    if (!interaction.customId.startsWith(SELECT_PREFIX)) {
+    if (!interaction.customId.startsWith(SMS_SELECT_PREFIX)) {
         if (!interaction.customId.startsWith(PROMO_SELECT_PREFIX)) {
             return;
         }
@@ -475,13 +453,76 @@ async function handleServiceSelect(interaction) {
     });
 
     await safeUpdate(interaction, {
-        content: panelHeader(serviceId, Number.isFinite(maxPrice) ? maxPrice : null),
-        components: panelComponents(interaction.user.id, serviceId, Number.isFinite(maxPrice) ? maxPrice : null)
+        content: smsPanelHeader(serviceId, Number.isFinite(maxPrice) ? maxPrice : null),
+        components: smsPanelComponents(interaction.user.id, serviceId, Number.isFinite(maxPrice) ? maxPrice : null)
     });
 }
 
 async function handleButton(interaction) {
-    if (interaction.customId.startsWith(GENERATE_PREFIX)) {
+    if (interaction.customId.startsWith(OPEN_SMS_PANEL_PREFIX)) {
+        const [, maxPriceRaw] = interaction.customId.split('|');
+        const maxPrice = maxPriceRaw ? Number(maxPriceRaw) : null;
+        const normalizedMaxPrice = Number.isFinite(maxPrice) ? maxPrice : null;
+        const defaultServiceId = SERVICES.uberPostmates.id;
+
+        logger.trace('Opening per-user SMS panel.', {
+            userId: interaction.user.id,
+            maxPrice: normalizedMaxPrice,
+            defaultServiceId
+        });
+
+        // Spin up a private panel for the clicking user, inheriting the admin's
+        // configured options. customIds carry this user's id so the panel is theirs.
+        await safeReply(interaction, {
+            content: smsPanelHeader(defaultServiceId, normalizedMaxPrice),
+            components: smsPanelComponents(interaction.user.id, defaultServiceId, normalizedMaxPrice),
+            flags: EPHEMERAL_FLAGS
+        });
+        return;
+    }
+
+    if (interaction.customId.startsWith(OPEN_PROMO_PANEL_PREFIX)) {
+        logger.trace('Opening per-user promo panel.', { userId: interaction.user.id });
+
+        const deferred = await safeDeferReply(interaction, { flags: EPHEMERAL_FLAGS });
+        if (!deferred) {
+            return;
+        }
+
+        let promoServices = [];
+        try {
+            promoServices = await fetchPromoServices({
+                userId: interaction.user.id,
+                interaction
+            });
+        } catch (err) {
+            const message = err && err.message ? err.message : String(err);
+            await safeEditReply(interaction, { content: `Failed to load promo services: ${message}` });
+            return;
+        }
+
+        if (!Array.isArray(promoServices) || promoServices.length === 0) {
+            logger.warn('Promo service API returned no usable services.', { userId: interaction.user.id });
+            await safeEditReply(interaction, { content: 'No promo services returned by the API.' });
+            return;
+        }
+
+        logger.debug('Promo services loaded.', {
+            userId: interaction.user.id,
+            serviceCount: promoServices.length
+        });
+
+        const defaultService = promoServices[0];
+        const defaultServiceId = String(defaultService?.value ?? defaultService?.id ?? defaultService?.serviceId ?? defaultService?.service_id ?? defaultService?.code ?? defaultService?.key ?? '');
+
+        await safeEditReply(interaction, {
+            content: promoPanelHeader(defaultService?.label ?? defaultServiceId),
+            components: promoPanelComponents(interaction.user.id, promoServices, defaultServiceId)
+        });
+        return;
+    }
+
+    if (interaction.customId.startsWith(SMS_GENERATE_PREFIX)) {
         const [, , serviceId, maxPriceRaw] = interaction.customId.split('|');
 
         if (!isAllowedService(serviceId)) {
@@ -506,7 +547,7 @@ async function handleButton(interaction) {
             maxPrice: Number.isFinite(maxPrice) ? maxPrice : null
         });
 
-        await generateAndTrack(interaction, serviceId, Number.isFinite(maxPrice) ? maxPrice : null);
+        await generateSMSAndTrack(interaction, serviceId, Number.isFinite(maxPrice) ? maxPrice : null);
         return;
     }
 
@@ -530,7 +571,7 @@ async function handleButton(interaction) {
         });
 
         const content = promoCode
-            ? `Promo code:\n${formatPromoCopyFriendly(promoCode)}`
+            ? formatCopyFriendly(promoCode)
             : 'No promo code returned by API.';
 
         logger.debug('Promo code fetch completed.', {
@@ -660,7 +701,7 @@ async function handleButton(interaction) {
     }
 }
 
-async function generateAndTrack(interaction, serviceId, maxPrice) {
+async function generateSMSAndTrack(interaction, serviceId, maxPrice) {
     try {
         logger.debug('Starting SMS purchase request.', {
             userId: interaction.user.id,

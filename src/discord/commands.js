@@ -6,7 +6,7 @@ const commands = [
         description: 'Replies with pong'
     },
     {
-        name: 'panel',
+        name: 'smspanel',
         description: 'Open UK SMS panel with service dropdown and generate button',
         default_member_permissions: '32',
         options: [

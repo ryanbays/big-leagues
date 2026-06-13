@@ -22,8 +22,10 @@ const SERVICE_OPTIONS = [
     }
 ];
 
-const SELECT_PREFIX = 'svc_select';
-const GENERATE_PREFIX = 'generate';
+const OPEN_SMS_PANEL_PREFIX = 'open_sms_panel';
+const SMS_SELECT_PREFIX = 'svc_select';
+const SMS_GENERATE_PREFIX = 'generate';
+const OPEN_PROMO_PANEL_PREFIX = 'open_promo_panel';
 const PROMO_SELECT_PREFIX = 'promo_select';
 const PROMO_FETCH_PREFIX = 'promo_fetch';
 const REFRESH_PREFIX = 'refresh';
@@ -36,8 +38,10 @@ module.exports = {
     OTP_POLL_INTERVAL_MS,
     SERVICES,
     SERVICE_OPTIONS,
-    SELECT_PREFIX,
-    GENERATE_PREFIX,
+    OPEN_SMS_PANEL_PREFIX,
+    SMS_SELECT_PREFIX,
+    SMS_GENERATE_PREFIX,
+    OPEN_PROMO_PANEL_PREFIX,
     PROMO_SELECT_PREFIX,
     PROMO_FETCH_PREFIX,
     REFRESH_PREFIX,

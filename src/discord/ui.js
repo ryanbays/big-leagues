@@ -8,8 +8,10 @@ const {
 const {
     UK_COUNTRY,
     SERVICE_OPTIONS,
-    SELECT_PREFIX,
-    GENERATE_PREFIX,
+    OPEN_SMS_PANEL_PREFIX,
+    SMS_SELECT_PREFIX,
+    SMS_GENERATE_PREFIX,
+    OPEN_PROMO_PANEL_PREFIX,
     PROMO_SELECT_PREFIX,
     PROMO_FETCH_PREFIX,
     REFRESH_PREFIX,
@@ -19,7 +21,27 @@ const {
 const { serviceLabelFromId } = require('../serviceUtils');
 const { isRefundSuccess, extractRefundMessage } = require('../smspool/parsing');
 
-function panelHeader(serviceId, maxPrice) {
+function smsPanelGeneratorHeader(maxPrice) {
+    const lines = ['UK SMS Panel', 'Country: ' + UK_COUNTRY];
+
+    if (maxPrice !== null && maxPrice !== undefined) {
+        lines.push(`Max price: ${maxPrice}`);
+    }
+
+    lines.push('Press the button below to open your own panel.');
+    return lines.join('\n');
+}
+
+function smsPanelGeneratorComponents(maxPrice) {
+    const open = new ButtonBuilder()
+        .setCustomId(`${OPEN_SMS_PANEL_PREFIX}|${maxPrice ?? ''}`)
+        .setLabel('Open SMS Panel')
+        .setStyle(ButtonStyle.Primary);
+
+    return [new ActionRowBuilder().addComponents(open)];
+}
+
+function smsPanelHeader(serviceId, maxPrice) {
     const lines = ['Country: ' + UK_COUNTRY];
 
     if (maxPrice !== null && maxPrice !== undefined) {
@@ -30,9 +52,9 @@ function panelHeader(serviceId, maxPrice) {
     return lines.join('\n');
 }
 
-function panelComponents(userId, selectedServiceId, maxPrice) {
+function smsPanelComponents(userId, selectedServiceId, maxPrice) {
     const select = new StringSelectMenuBuilder()
-        .setCustomId(`${SELECT_PREFIX}|${userId}|${maxPrice ?? ''}`)
+        .setCustomId(`${SMS_SELECT_PREFIX}|${userId}|${maxPrice ?? ''}`)
         .setPlaceholder('Select service')
         .addOptions(
             SERVICE_OPTIONS.map((option) => ({
@@ -42,11 +64,24 @@ function panelComponents(userId, selectedServiceId, maxPrice) {
         );
 
     const generate = new ButtonBuilder()
-        .setCustomId(`${GENERATE_PREFIX}|${userId}|${selectedServiceId}|${maxPrice ?? ''}`)
+        .setCustomId(`${SMS_GENERATE_PREFIX}|${userId}|${selectedServiceId}|${maxPrice ?? ''}`)
         .setLabel('Generate')
         .setStyle(ButtonStyle.Success);
 
     return [new ActionRowBuilder().addComponents(select), new ActionRowBuilder().addComponents(generate)];
+}
+
+function promoPanelGeneratorHeader() {
+    return ['Promo codes', 'Press the button below to open your own promo panel.'].join('\n');
+}
+
+function promoPanelGeneratorComponents() {
+    const open = new ButtonBuilder()
+        .setCustomId(OPEN_PROMO_PANEL_PREFIX)
+        .setLabel('Open Promo Panel')
+        .setStyle(ButtonStyle.Primary);
+
+    return [new ActionRowBuilder().addComponents(open)];
 }
 
 function promoPanelHeader(serviceLabel) {
@@ -160,11 +195,13 @@ function orderMessage(orderInfo) {
     return lines.join('\n');
 }
 
-function formatCopyFriendly(phone) {
-    return `\`${String(phone)}\``;
+// This formats for mobile (default)
+function formatCopyFriendly(str) {
+    return `\`${String(str)}\``;
 }
 
-function formatPromoCopyFriendly(promoCode) {
+// This formats for pc
+function formatPCCopyFriendly(promoCode) {
     return `\`\`\`text\n${String(promoCode)}\n\`\`\``;
 }
 
@@ -185,13 +222,17 @@ function formatRefundResponse(refundRes) {
 }
 
 module.exports = {
-    panelHeader,
-    panelComponents,
+    smsPanelGeneratorHeader,
+    smsPanelGeneratorComponents,
+    smsPanelHeader,
+    smsPanelComponents,
+    promoPanelGeneratorHeader,
+    promoPanelGeneratorComponents,
     promoPanelHeader,
     promoPanelComponents,
     orderActionComponents,
     orderMessage,
     formatCopyFriendly,
-    formatPromoCopyFriendly,
+    formatPCCopyFriendly,
     formatRefundResponse
 };

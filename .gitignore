@@ -1,6 +1,7 @@
 .env
-data/
-node_modules/
+/data/
+/node_modules/
 orders.db
 package-lock.json
-.vscode/
+/.vscode/
+/.idea/
