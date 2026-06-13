@@ -8,4 +8,6 @@
 - Fix the formatting of the messages so they make more sense
 - Add a leaderboard with total spend
 ## 4. Some admin controls/panels to adjust things.
+## 5. Add emails and OTP services
+- [gotp-email](https://github.com/ryanbays/gotp-email)
 ## 5. MORE EMBEDS EVERYWHERE
