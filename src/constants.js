@@ -6,7 +6,9 @@ const OTP_POLL_INTERVAL_MS = 5000;
 
 const SERVICES = {
     uberPostmates: { id: '951', label: 'Uber' },
-    greggs: { id: '1083', label: 'Greggs' }
+    deliveroo: {id: '258', label: 'Deliveroo' },
+    greggs: { id: '1083', label: 'Greggs' },
+    others: {id: '817', label: 'Other'}
 };
 
 const SERVICE_OPTIONS = [
@@ -19,6 +21,16 @@ const SERVICE_OPTIONS = [
         label: SERVICES.greggs.label,
         value: SERVICES.greggs.id,
         description: 'UK number for Greggs'
+    },
+    {
+        label: SERVICES.deliveroo.label,
+        value: SERVICES.deliveroo.id,
+        description: 'UK number for Deliveroo'
+    },
+    {
+        label: SERVICES.others.label,
+        value: SERVICES.others.id,
+        description: 'UK number for any other service'
     }
 ];
 
