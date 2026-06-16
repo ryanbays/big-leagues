@@ -1,7 +1,10 @@
 .env
 /data/
 /node_modules/
-orders.db
+orders.index
 package-lock.json
 /.vscode/
 /.idea/
+*.db
+*.db-shm
+*.db-wal

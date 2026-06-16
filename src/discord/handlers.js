@@ -46,7 +46,7 @@ const {
     isUnknownInteractionError
 } = require('./safe');
 
-const { addOrder, removeOrder, listOrders } = require('./orderDb');
+const { addOrder, removeOrder, listOrders } = require('../db/orders');
 
 const logger = createLogger('discord/handlers');
 const assert = require('assert').strict;

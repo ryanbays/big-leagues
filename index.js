@@ -5,4 +5,4 @@ const logger = createLogger('index');
 
 logger.info('Starting application bootstrap.');
 
-startBot();
+startBot().then(r => {});
