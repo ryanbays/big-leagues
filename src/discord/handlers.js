@@ -7,7 +7,6 @@ const {
     SMS_GENERATE_PREFIX,
     OPEN_PROMO_PANEL_PREFIX,
     PROMO_SELECT_PREFIX,
-
     PROMO_FETCH_PREFIX,
     REFRESH_PREFIX,
     REFUND_PREFIX,
@@ -89,11 +88,13 @@ function formatMoney(n) {
     return num.toFixed(2);
 }
 
+/*
 function withinRange(value, min, max) {
     if (min !== null && min !== undefined && Number.isFinite(min) && value < min) return false;
     if (max !== null && max !== undefined && Number.isFinite(max) && value > max) return false;
     return true;
 }
+*/
 
 function getUserLabelFromOrders(orders, userId) {
     if (!userId) return 'unknown';

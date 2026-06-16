@@ -1,0 +1,9 @@
+services:
+  app:
+    build: .
+    volumes:
+      - db:/app/data
+    restart: unless-stopped
+
+volumes:
+  db:
