@@ -1,5 +1,4 @@
-# Use official Node image
-FROM node:lts-alpine3.24
+FROM mcr.microsoft.com/playwright:v1.50.0-noble
 
 # Set working directory inside container
 WORKDIR /app
