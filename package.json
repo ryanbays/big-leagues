@@ -5,6 +5,7 @@
     "better-sqlite3": "^12.11.1",
     "discord-api-types": "^0.38.26",
     "discord.js": "^14.26.4",
-    "dotenv": "^17.4.2"
+    "dotenv": "^17.4.2",
+    "playwright": "^1.50.0"
   }
 }

@@ -81,6 +81,14 @@ db.exec(`
 `);
 
 db.exec(`
+    CREATE TABLE IF NOT EXISTS fairfx_logins (
+        userId TEXT PRIMARY KEY,
+        email TEXT NOT NULL,
+        password TEXT
+    );
+`);
+
+db.exec(`
     CREATE INDEX IF NOT EXISTS idx_user_inboxes_user_created
     ON user_inboxes (userId, createdAt DESC);
 `);

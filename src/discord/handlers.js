@@ -335,171 +335,123 @@ function formatHistoryResponse({ filters, orders, spendSummary, allOrdersForLook
     return lines.join('\n');
 }
 
-async function handleSlashCommand(interaction) {
-    logger.debug('Handling slash command.', {
-        commandName: interaction.commandName,
-        userId: interaction.user?.id || null
+async function handlePingCommand(interaction) {
+    await safeReply(interaction, { content: 'Pong!', flags: EPHEMERAL_FLAGS });
+}
+
+async function handleSmsPanelCommand(interaction) {
+    const maxPrice = interaction.options.getNumber('maxprice');
+    assert(maxPrice !== null && maxPrice !== undefined && Number.isFinite(maxPrice), 'Invalid maxprice input'); // should be guaranteed by command definition
+
+    logger.trace('Posting SMS panel generator.', {
+        userId: interaction.user.id,
+        maxPrice
     });
 
-    if (interaction.commandName === 'ping') {
-        await safeReply(interaction, { content: 'Pong!', flags: EPHEMERAL_FLAGS });
+    // Post a shared generator message. The admin's options (e.g. max price)
+    // are baked into the button; each user who clicks it gets their own
+    // ephemeral panel that inherits those options.
+    await safeReply(interaction, {
+        content: smsPanelGeneratorHeader(maxPrice),
+        components: smsPanelGeneratorComponents(maxPrice)
+    });
+}
+
+async function handlePromoPanelCommand(interaction) {
+    logger.trace('Posting promo panel generator.', { userId: interaction.user.id });
+
+    // Post a shared generator message; each user who clicks the button gets
+    // their own ephemeral promo panel.
+    await safeReply(interaction, {
+        content: promoPanelGeneratorHeader(),
+        components: promoPanelGeneratorComponents()
+    });
+}
+
+async function handleNewEmailCommand(interaction) {
+    const deferred = await safeDeferReply(interaction, { flags: EPHEMERAL_FLAGS });
+    if (!deferred) {
         return;
     }
 
-    if (interaction.commandName === 'smspanel') {
-        const maxPrice = interaction.options.getNumber('maxprice');
-        assert(maxPrice !== null && maxPrice !== undefined && Number.isFinite(maxPrice), 'Invalid maxprice input'); // should be guaranteed by command definition
+    const alias = interaction.options.getString('alias');
 
-        logger.trace('Posting SMS panel generator.', {
+    let created;
+    try {
+        created = createInboxForUser({
             userId: interaction.user.id,
-            maxPrice
+            userName: interaction.user?.username || interaction.user?.tag || interaction.user.id,
+            alias
         });
-
-        // Post a shared generator message. The admin's options (e.g. max price)
-        // are baked into the button; each user who clicks it gets their own
-        // ephemeral panel that inherits those options.
-        await safeReply(interaction, {
-            content: smsPanelGeneratorHeader(maxPrice),
-            components: smsPanelGeneratorComponents(maxPrice)
-        });
-        return;
-    }
-
-    if (interaction.commandName === 'promopanel') {
-        logger.trace('Posting promo panel generator.', { userId: interaction.user.id });
-
-        // Post a shared generator message; each user who clicks the button gets
-        // their own ephemeral promo panel.
-        await safeReply(interaction, {
-            content: promoPanelGeneratorHeader(),
-            components: promoPanelGeneratorComponents()
-        });
-        return;
-    }
-
-    if (interaction.commandName === 'newemail') {
-        const deferred = await safeDeferReply(interaction, { flags: EPHEMERAL_FLAGS });
-        if (!deferred) {
-            return;
-        }
-
-        const alias = interaction.options.getString('alias');
-
-        let created;
-        try {
-            created = createInboxForUser({
-                userId: interaction.user.id,
-                userName: interaction.user?.username || interaction.user?.tag || interaction.user.id,
-                alias
-            });
-        } catch (err) {
-            await safeEditReply(interaction, {
-                content: `Failed to create inbox email: ${err && err.message ? err.message : String(err)}`
-            });
-            return;
-        }
-
-        const panel = buildEmailPanelPayload({
-            userId: interaction.user.id,
-            selectedInboxId: created.inboxId,
-            introText: `New inbox email created: ${formatCopyFriendly(created.email)}`
-        });
-
+    } catch (err) {
         await safeEditReply(interaction, {
-            content: panel.content,
-            components: panel.components
+            content: `Failed to create inbox email: ${err && err.message ? err.message : String(err)}`
         });
         return;
     }
 
-    if (interaction.commandName === 'emailpanel') {
-        const deferred = await safeDeferReply(interaction, { flags: EPHEMERAL_FLAGS });
-        if (!deferred) {
-            return;
-        }
+    const panel = buildEmailPanelPayload({
+        userId: interaction.user.id,
+        selectedInboxId: created.inboxId,
+        introText: `New inbox email created: ${formatCopyFriendly(created.email)}`
+    });
 
-        const panel = buildEmailPanelPayload({ userId: interaction.user.id });
+    await safeEditReply(interaction, {
+        content: panel.content,
+        components: panel.components
+    });
+}
 
+async function handleEmailPanelCommand(interaction) {
+    const deferred = await safeDeferReply(interaction, { flags: EPHEMERAL_FLAGS });
+    if (!deferred) {
+        return;
+    }
+
+    const panel = buildEmailPanelPayload({ userId: interaction.user.id });
+
+    await safeEditReply(interaction, {
+        content: panel.content,
+        components: panel.components
+    });
+}
+
+async function handleBuyUkCommand(interaction) {
+    const serviceId = interaction.options.getString('service', true);
+    const maxPrice = interaction.options.getNumber('maxprice');
+
+    const deferred = await safeDeferReply(interaction, { flags: EPHEMERAL_FLAGS });
+    if (!deferred) {
+        return;
+    }
+
+    await safeEditReply(interaction, {
+        content: `Generating UK number for ${serviceLabelFromId(serviceId)} (${serviceId})...`
+    });
+
+    await generateSMSAndTrack(interaction, serviceId, maxPrice);
+}
+
+async function handleHistoryCommand(interaction) {
+    const deferred = await safeDeferReply(interaction, { flags: EPHEMERAL_FLAGS });
+    if (!deferred) return;
+
+    if (typeof listOrders !== 'function') {
         await safeEditReply(interaction, {
-            content: panel.content,
-            components: panel.components
+            content: 'History is not available: orderDb.listOrders is missing.',
+            flags: EPHEMERAL_FLAGS
         });
         return;
     }
 
-    if (interaction.commandName === 'buyuk') {
-        const serviceId = interaction.options.getString('service', true);
-        const maxPrice = interaction.options.getNumber('maxprice');
+    const sub = interaction.options.getSubcommand(false);
 
-        const deferred = await safeDeferReply(interaction, { flags: EPHEMERAL_FLAGS });
-        if (!deferred) {
-            return;
-        }
-
-        await safeEditReply(interaction, {
-            content: `Generating UK number for ${serviceLabelFromId(serviceId)} (${serviceId})...`
-        });
-
-        await generateSMSAndTrack(interaction, serviceId, maxPrice);
-        return;
-    }
-
-    // /history [from] [to] [service] [minprice] [maxprice] [user] [limit]
-    // /history spend [user]
-    if (interaction.commandName === 'history') {
-        const deferred = await safeDeferReply(interaction, { flags: EPHEMERAL_FLAGS });
-        if (!deferred) return;
-
-        if (typeof listOrders !== 'function') {
-            await safeEditReply(interaction, {
-                content: 'History is not available: orderDb.listOrders is missing.',
-                flags: EPHEMERAL_FLAGS
-            });
-            return;
-        }
-
-        const sub = interaction.options.getSubcommand(false);
-
-        // Subcommand: spend
-        if (sub === 'spend') {
-            const userId = interaction.options.getString('user') || interaction.user.id;
-
-            let orders = [];
-            try {
-                orders = await listOrders();
-            } catch (e) {
-                await safeEditReply(interaction, {
-                    content: `Failed to load order history: ${e && e.message ? e.message : String(e)}`,
-                    flags: EPHEMERAL_FLAGS
-                });
-                return;
-            }
-
-            const nowMs = Date.now();
-            const sums = summarizeSpend(orders, userId, nowMs);
-            const userLabel = getUserLabelFromOrders(orders, userId);
-            const userOrders = orders.filter((o) => String(o.userId) === String(userId));
-
-            await safeEditReply(interaction, {
-                content: formatSpendSummaryResponse({ userLabel, spendSummary: sums, userOrders }),
-                flags: EPHEMERAL_FLAGS
-            });
-            return;
-        }
-
-        // Default: list orders with filters
-        const fromMs = parseDateInput(interaction.options.getString('from'));
-        const toMs = parseDateInput(interaction.options.getString('to'));
-        const serviceId = normalizeServiceId(interaction.options.getString('service'));
-        const minPrice = parseNumberInput(interaction.options.getNumber('minprice'));
-        const maxPrice = parseNumberInput(interaction.options.getNumber('maxprice'));
-        const userId = interaction.options.getString('user') || null;
-        const limitRaw = interaction.options.getInteger('limit');
-        const limit = Number.isInteger(limitRaw) ? Math.max(1, Math.min(200, limitRaw)) : 50;
+    // Subcommand: spend
+    if (sub === 'spend') {
+        const userId = interaction.options.getString('user') || interaction.user.id;
 
         let orders = [];
         try {
-            // Expect listOrders to return objects like: { orderId, userId, serviceId, price, createdAt }
             orders = await listOrders();
         } catch (e) {
             await safeEditReply(interaction, {
@@ -509,49 +461,127 @@ async function handleSlashCommand(interaction) {
             return;
         }
 
-        const filtered = orders
-            .filter((o) => {
-                if (userId && String(o.userId) !== String(userId)) return false;
-
-                if (serviceId) {
-                    if (!o.serviceId) return false;
-                    if (String(o.serviceId) !== String(serviceId)) return false;
-                }
-
-                const price = parseNumberInput(o.price);
-                if (minPrice !== null && minPrice !== undefined && Number.isFinite(minPrice)) {
-                    if (!Number.isFinite(price) || price < minPrice) return false;
-                }
-                if (maxPrice !== null && maxPrice !== undefined && Number.isFinite(maxPrice)) {
-                    if (!Number.isFinite(price) || price > maxPrice) return false;
-                }
-
-                const createdAt = parseNumberInput(o.createdAt);
-                if (fromMs && Number.isFinite(fromMs)) {
-                    if (!Number.isFinite(createdAt) || createdAt < fromMs) return false;
-                }
-                if (toMs && Number.isFinite(toMs)) {
-                    if (!Number.isFinite(createdAt) || createdAt > toMs) return false;
-                }
-
-                return true;
-            })
-            .sort((a, b) => Number(b.createdAt || 0) - Number(a.createdAt || 0))
-            .slice(0, limit);
-
-        const spendSummary = userId ? summarizeSpend(orders, userId, Date.now()) : null;
+        const nowMs = Date.now();
+        const sums = summarizeSpend(orders, userId, nowMs);
+        const userLabel = getUserLabelFromOrders(orders, userId);
+        const userOrders = orders.filter((o) => String(o.userId) === String(userId));
 
         await safeEditReply(interaction, {
-            content: formatHistoryResponse({
-                filters: { fromMs, toMs, serviceId, minPrice, maxPrice, userId, limit },
-                orders: filtered,
-                spendSummary,
-                allOrdersForLookups: orders
-            }),
+            content: formatSpendSummaryResponse({ userLabel, spendSummary: sums, userOrders }),
             flags: EPHEMERAL_FLAGS
         });
         return;
     }
+
+    // Default: list orders with filters
+    const fromMs = parseDateInput(interaction.options.getString('from'));
+    const toMs = parseDateInput(interaction.options.getString('to'));
+    const serviceId = normalizeServiceId(interaction.options.getString('service'));
+    const minPrice = parseNumberInput(interaction.options.getNumber('minprice'));
+    const maxPrice = parseNumberInput(interaction.options.getNumber('maxprice'));
+    const userId = interaction.options.getString('user') || null;
+    const limitRaw = interaction.options.getInteger('limit');
+    const limit = Number.isInteger(limitRaw) ? Math.max(1, Math.min(200, limitRaw)) : 50;
+
+    let orders = [];
+    try {
+        // Expect listOrders to return objects like: { orderId, userId, serviceId, price, createdAt }
+        orders = await listOrders();
+    } catch (e) {
+        await safeEditReply(interaction, {
+            content: `Failed to load order history: ${e && e.message ? e.message : String(e)}`,
+            flags: EPHEMERAL_FLAGS
+        });
+        return;
+    }
+
+    const filtered = orders
+        .filter((o) => {
+            if (userId && String(o.userId) !== String(userId)) return false;
+
+            if (serviceId) {
+                if (!o.serviceId) return false;
+                if (String(o.serviceId) !== String(serviceId)) return false;
+            }
+
+            const price = parseNumberInput(o.price);
+            if (minPrice !== null && minPrice !== undefined && Number.isFinite(minPrice)) {
+                if (!Number.isFinite(price) || price < minPrice) return false;
+            }
+            if (maxPrice !== null && maxPrice !== undefined && Number.isFinite(maxPrice)) {
+                if (!Number.isFinite(price) || price > maxPrice) return false;
+            }
+
+            const createdAt = parseNumberInput(o.createdAt);
+            if (fromMs && Number.isFinite(fromMs)) {
+                if (!Number.isFinite(createdAt) || createdAt < fromMs) return false;
+            }
+            if (toMs && Number.isFinite(toMs)) {
+                if (!Number.isFinite(createdAt) || createdAt > toMs) return false;
+            }
+
+            return true;
+        })
+        .sort((a, b) => Number(b.createdAt || 0) - Number(a.createdAt || 0))
+        .slice(0, limit);
+
+    const spendSummary = userId ? summarizeSpend(orders, userId, Date.now()) : null;
+
+    await safeEditReply(interaction, {
+        content: formatHistoryResponse({
+            filters: { fromMs, toMs, serviceId, minPrice, maxPrice, userId, limit },
+            orders: filtered,
+            spendSummary,
+            allOrdersForLookups: orders
+        }),
+        flags: EPHEMERAL_FLAGS
+    });
+}
+
+async function handleFairFXCommand(interaction) {
+    const deferred = await safeDeferReply(interaction, { flags: EPHEMERAL_FLAGS });
+    if (!deferred) return;
+
+    const sub = interaction.options.getSubcommand(true);
+
+    if (sub === "login") {
+        const email = interaction.options.getString('email');
+        const password = interaction.options.getString('password');
+
+    }
+}
+
+const slashCommandHandlers = {
+    ping: handlePingCommand,
+    smspanel: handleSmsPanelCommand,
+    promopanel: handlePromoPanelCommand,
+    newemail: handleNewEmailCommand,
+    emailpanel: handleEmailPanelCommand,
+    buyuk: handleBuyUkCommand,
+    history: handleHistoryCommand,
+    fairfx: handleFairFXCommand,
+};
+
+async function handleSlashCommand(interaction) {
+    logger.debug('Handling slash command.', {
+        commandName: interaction.commandName,
+        userId: interaction.user?.id || null
+    });
+
+    const handler = slashCommandHandlers[interaction.commandName];
+    if (!handler) {
+        logger.warn('No slash command handler registered.', {
+            commandName: interaction.commandName,
+            userId: interaction.user?.id || null
+        });
+        await safeReply(interaction, {
+            content: `Unknown command: ${interaction.commandName}`,
+            flags: EPHEMERAL_FLAGS
+        });
+        return;
+    }
+
+    await handler(interaction);
 }
 
 async function handleServiceSelect(interaction) {
