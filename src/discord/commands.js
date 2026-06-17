@@ -25,6 +25,23 @@ const commands = [
         options: []
     },
     {
+        name: 'newemail',
+        description: 'Create a new rainserver inbox email for yourself',
+        options: [
+            {
+                name: 'alias',
+                type: 3,
+                description: 'Optional alias prefix (letters, numbers, dashes)',
+                required: false
+            }
+        ]
+    },
+    {
+        name: 'emailpanel',
+        description: 'Open your inbox panel and fetch latest OTP',
+        options: []
+    },
+    {
         name: 'buyuk',
         description: 'Direct buy UK number and check OTP',
         default_member_permissions: '32',

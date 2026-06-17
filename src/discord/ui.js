@@ -14,6 +14,11 @@ const {
     OPEN_PROMO_PANEL_PREFIX,
     PROMO_SELECT_PREFIX,
     PROMO_FETCH_PREFIX,
+    EMAIL_SELECT_PREFIX,
+    EMAIL_CREATE_PREFIX,
+    EMAIL_REFRESH_PREFIX,
+    EMAIL_OTP_PREFIX,
+    EMAIL_DELETE_PREFIX,
     REFRESH_PREFIX,
     REFUND_PREFIX
 } = require('../constants');
@@ -169,6 +174,74 @@ function promoPanelComponents(userId, services, selectedServiceId) {
     return [new ActionRowBuilder().addComponents(select), new ActionRowBuilder().addComponents(fetchPromo)];
 }
 
+function emailPanelHeader({ domain, inboxes, selectedInboxId }) {
+    const total = Array.isArray(inboxes) ? inboxes.length : 0;
+    const selected = total
+        ? (inboxes.find((item) => String(item.inboxId) === String(selectedInboxId)) || inboxes[0])
+        : null;
+
+    const lines = [
+        'Inbox emails',
+        `Domain: ${domain}`,
+        `Registered inboxes: ${total}`
+    ];
+
+    if (selected) {
+        lines.push(`Selected: ${selected.email}`);
+    }
+
+    lines.push('Use New Email to register a fresh inbox, then Get Latest OTP.');
+    return lines.join('\n');
+}
+
+function emailPanelComponents(userId, inboxes, selectedInboxId) {
+    const normalized = Array.isArray(inboxes) ? inboxes : [];
+    const selected = normalized.find((item) => String(item.inboxId) === String(selectedInboxId)) || normalized[0] || null;
+
+    const rows = [];
+
+    if (normalized.length > 0) {
+        const options = normalized.slice(0, 25).map((item, index) => ({
+            label: String(item.email).slice(0, 100),
+            value: String(item.inboxId),
+            description: `Inbox ${index + 1}`,
+            default: selected ? String(item.inboxId) === String(selected.inboxId) : index === 0
+        }));
+
+        const select = new StringSelectMenuBuilder()
+            .setCustomId(`${EMAIL_SELECT_PREFIX}|${userId}`)
+            .setPlaceholder('Select a registered inbox')
+            .addOptions(options);
+
+        rows.push(new ActionRowBuilder().addComponents(select));
+    }
+
+    const create = new ButtonBuilder()
+        .setCustomId(`${EMAIL_CREATE_PREFIX}|${userId}`)
+        .setLabel('New Email')
+        .setStyle(ButtonStyle.Success);
+
+    const refresh = new ButtonBuilder()
+        .setCustomId(`${EMAIL_REFRESH_PREFIX}|${userId}`)
+        .setLabel('Refresh')
+        .setStyle(ButtonStyle.Secondary);
+
+    const otp = new ButtonBuilder()
+        .setCustomId(`${EMAIL_OTP_PREFIX}|${userId}|${selected ? selected.inboxId : ''}`)
+        .setLabel('Get Latest OTP')
+        .setStyle(ButtonStyle.Primary)
+        .setDisabled(!selected);
+
+    const remove = new ButtonBuilder()
+        .setCustomId(`${EMAIL_DELETE_PREFIX}|${userId}|${selected ? selected.inboxId : ''}`)
+        .setLabel('Delete Email')
+        .setStyle(ButtonStyle.Danger)
+        .setDisabled(!selected);
+
+    rows.push(new ActionRowBuilder().addComponents(create, refresh, otp, remove));
+    return rows;
+}
+
 function orderActionComponents(userId, orderId, refunded) {
     const refresh = new ButtonBuilder()
         .setCustomId(`${REFRESH_PREFIX}|${userId}|${orderId}`)
@@ -230,6 +303,8 @@ module.exports = {
     promoPanelGeneratorComponents,
     promoPanelHeader,
     promoPanelComponents,
+    emailPanelHeader,
+    emailPanelComponents,
     orderActionComponents,
     orderMessage,
     formatCopyFriendly,

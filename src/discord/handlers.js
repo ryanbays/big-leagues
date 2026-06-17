@@ -8,6 +8,11 @@ const {
     OPEN_PROMO_PANEL_PREFIX,
     PROMO_SELECT_PREFIX,
     PROMO_FETCH_PREFIX,
+    EMAIL_SELECT_PREFIX,
+    EMAIL_CREATE_PREFIX,
+    EMAIL_REFRESH_PREFIX,
+    EMAIL_OTP_PREFIX,
+    EMAIL_DELETE_PREFIX,
     REFRESH_PREFIX,
     REFUND_PREFIX,
     EPHEMERAL_FLAGS
@@ -19,6 +24,8 @@ const { isAllowedService, serviceLabelFromId } = require('../serviceUtils');
 const { buySmsNumber, checkSms, cancelSms } = require('../smspool/client');
 const { extractSmsText, isRefundSuccess } = require('../smspool/parsing');
 const { fetchPromoServices, fetchPromoCode } = require('./promo');
+const { getOtp } = require('../gotp-api');
+const { EMAIL_DOMAIN } = require('../env');
 
 const {
     smsPanelGeneratorHeader,
@@ -29,6 +36,8 @@ const {
     promoPanelGeneratorComponents,
     promoPanelHeader,
     promoPanelComponents,
+    emailPanelHeader,
+    emailPanelComponents,
     orderActionComponents,
     orderMessage,
     formatCopyFriendly,
@@ -46,6 +55,7 @@ const {
 } = require('./safe');
 
 const { addOrder, removeOrder, listOrders } = require('../db/orders');
+const { addUserInbox, listUserInboxes, removeUserInbox } = require('../db/inboxes');
 
 const logger = createLogger('discord/handlers');
 const assert = require('assert').strict;
@@ -86,6 +96,110 @@ function formatMoney(n) {
     const num = Number(n);
     if (!Number.isFinite(num)) return String(n);
     return num.toFixed(2);
+}
+
+function sanitizeInboxBase(raw) {
+    const value = String(raw || '')
+        .toLowerCase()
+        .replace(/[^a-z0-9-]+/g, '-')
+        .replace(/^-+|-+$/g, '')
+        .slice(0, 24);
+
+    return value || 'user';
+}
+
+function buildInboxId(base) {
+    const suffix = Math.random().toString(36).slice(2, 8);
+    const clippedBase = String(base || 'user').slice(0, 30);
+    return `${clippedBase}-${suffix}`;
+}
+
+function pickSelectedInbox(inboxes, selectedInboxId) {
+    const list = Array.isArray(inboxes) ? inboxes : [];
+    if (!list.length) return null;
+
+    if (selectedInboxId) {
+        const match = list.find((item) => String(item.inboxId) === String(selectedInboxId));
+        if (match) return match;
+    }
+
+    return list[0];
+}
+
+function buildEmailPanelPayload({ userId, selectedInboxId, introText }) {
+    const inboxes = listUserInboxes(userId);
+    const selectedInbox = pickSelectedInbox(inboxes, selectedInboxId);
+
+    const baseHeader = emailPanelHeader({
+        domain: EMAIL_DOMAIN,
+        inboxes,
+        selectedInboxId: selectedInbox ? selectedInbox.inboxId : null
+    });
+
+    return {
+        selectedInbox,
+        inboxes,
+        content: introText ? `${introText}\n\n${baseHeader}` : baseHeader,
+        components: emailPanelComponents(userId, inboxes, selectedInbox ? selectedInbox.inboxId : null)
+    };
+}
+
+function isConstraintError(err) {
+    const msg = err && err.message ? err.message : String(err);
+    return /SQLITE_CONSTRAINT/i.test(msg);
+}
+
+function createInboxForUser({ userId, userName, alias }) {
+    const base = sanitizeInboxBase(alias || userName || userId);
+
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+        const inboxId = buildInboxId(base);
+        const email = `${inboxId}@${EMAIL_DOMAIN}`;
+
+        try {
+            addUserInbox({
+                inboxId,
+                userId,
+                userName,
+                email,
+                createdAt: Date.now()
+            });
+
+            return { inboxId, email };
+        } catch (err) {
+            if (!isConstraintError(err)) {
+                throw err;
+            }
+        }
+    }
+
+    throw new Error('Could not allocate a unique inbox id. Try again.');
+}
+
+function formatOtpResult(inboxRecord, otpPayload) {
+    const email = inboxRecord && inboxRecord.email ? inboxRecord.email : 'unknown';
+    const otp = otpPayload && typeof otpPayload === 'object' ? otpPayload.otp : null;
+
+    if (!otp) {
+        return `No OTP found yet for ${email}.`;
+    }
+
+    const from = otpPayload && otpPayload.from ? String(otpPayload.from) : null;
+    const timestamp = otpPayload && otpPayload.timestamp ? Number(otpPayload.timestamp) : null;
+    const lines = [
+        `Latest OTP for ${email}:`,
+        formatCopyFriendly(String(otp))
+    ];
+
+    if (from) {
+        lines.push(`From: ${from}`);
+    }
+
+    if (Number.isFinite(timestamp)) {
+        lines.push(`Received: ${new Date(timestamp * 1000).toLocaleString()}`);
+    }
+
+    return lines.join('\n');
 }
 
 /*
@@ -263,6 +377,56 @@ async function handleSlashCommand(interaction) {
         return;
     }
 
+    if (interaction.commandName === 'newemail') {
+        const deferred = await safeDeferReply(interaction, { flags: EPHEMERAL_FLAGS });
+        if (!deferred) {
+            return;
+        }
+
+        const alias = interaction.options.getString('alias');
+
+        let created;
+        try {
+            created = createInboxForUser({
+                userId: interaction.user.id,
+                userName: interaction.user?.username || interaction.user?.tag || interaction.user.id,
+                alias
+            });
+        } catch (err) {
+            await safeEditReply(interaction, {
+                content: `Failed to create inbox email: ${err && err.message ? err.message : String(err)}`
+            });
+            return;
+        }
+
+        const panel = buildEmailPanelPayload({
+            userId: interaction.user.id,
+            selectedInboxId: created.inboxId,
+            introText: `New inbox email created: ${formatCopyFriendly(created.email)}`
+        });
+
+        await safeEditReply(interaction, {
+            content: panel.content,
+            components: panel.components
+        });
+        return;
+    }
+
+    if (interaction.commandName === 'emailpanel') {
+        const deferred = await safeDeferReply(interaction, { flags: EPHEMERAL_FLAGS });
+        if (!deferred) {
+            return;
+        }
+
+        const panel = buildEmailPanelPayload({ userId: interaction.user.id });
+
+        await safeEditReply(interaction, {
+            content: panel.content,
+            components: panel.components
+        });
+        return;
+    }
+
     if (interaction.commandName === 'buyuk') {
         const serviceId = interaction.options.getString('service', true);
         const maxPrice = interaction.options.getNumber('maxprice');
@@ -391,6 +555,27 @@ async function handleSlashCommand(interaction) {
 }
 
 async function handleServiceSelect(interaction) {
+    if (interaction.customId.startsWith(EMAIL_SELECT_PREFIX)) {
+        const [, ownerId] = interaction.customId.split('|');
+
+        if (interaction.user.id !== ownerId) {
+            await safeReply(interaction, { content: 'This panel belongs to another user.', flags: EPHEMERAL_FLAGS });
+            return;
+        }
+
+        const selectedInboxId = interaction.values[0];
+        const panel = buildEmailPanelPayload({
+            userId: interaction.user.id,
+            selectedInboxId
+        });
+
+        await safeUpdate(interaction, {
+            content: panel.content,
+            components: panel.components
+        });
+        return;
+    }
+
     if (!interaction.customId.startsWith(SMS_SELECT_PREFIX)) {
         if (!interaction.customId.startsWith(PROMO_SELECT_PREFIX)) {
             return;
@@ -460,6 +645,132 @@ async function handleServiceSelect(interaction) {
 }
 
 async function handleButton(interaction) {
+    if (interaction.customId.startsWith(EMAIL_CREATE_PREFIX)) {
+        const [, ownerId] = interaction.customId.split('|');
+
+        if (interaction.user.id !== ownerId) {
+            await safeReply(interaction, { content: 'This panel belongs to another user.', flags: EPHEMERAL_FLAGS });
+            return;
+        }
+
+        let created;
+        try {
+            created = createInboxForUser({
+                userId: interaction.user.id,
+                userName: interaction.user?.username || interaction.user?.tag || interaction.user.id
+            });
+        } catch (err) {
+            await safeReply(interaction, {
+                content: `Failed to create inbox email: ${err && err.message ? err.message : String(err)}`,
+                flags: EPHEMERAL_FLAGS
+            });
+            return;
+        }
+
+        const panel = buildEmailPanelPayload({
+            userId: interaction.user.id,
+            selectedInboxId: created.inboxId,
+            introText: `New inbox email created: ${formatCopyFriendly(created.email)}`
+        });
+
+        await safeUpdate(interaction, {
+            content: panel.content,
+            components: panel.components
+        });
+        return;
+    }
+
+    if (interaction.customId.startsWith(EMAIL_REFRESH_PREFIX)) {
+        const [, ownerId] = interaction.customId.split('|');
+
+        if (interaction.user.id !== ownerId) {
+            await safeReply(interaction, { content: 'This panel belongs to another user.', flags: EPHEMERAL_FLAGS });
+            return;
+        }
+
+        const panel = buildEmailPanelPayload({ userId: interaction.user.id });
+        await safeUpdate(interaction, {
+            content: panel.content,
+            components: panel.components
+        });
+        return;
+    }
+
+    if (interaction.customId.startsWith(EMAIL_OTP_PREFIX)) {
+        const [, ownerId, inboxId] = interaction.customId.split('|');
+
+        if (interaction.user.id !== ownerId) {
+            await safeReply(interaction, { content: 'This panel belongs to another user.', flags: EPHEMERAL_FLAGS });
+            return;
+        }
+
+        const inboxes = listUserInboxes(interaction.user.id);
+        const selectedInbox = pickSelectedInbox(inboxes, inboxId);
+
+        if (!selectedInbox) {
+            await safeReply(interaction, {
+                content: 'No inbox selected. Create one first using New Email.',
+                flags: EPHEMERAL_FLAGS
+            });
+            return;
+        }
+
+        let otpPayload;
+        try {
+            otpPayload = await getOtp(selectedInbox.inboxId);
+        } catch (err) {
+            await safeReply(interaction, {
+                content: `Failed to fetch OTP: ${err && err.message ? err.message : String(err)}`,
+                flags: EPHEMERAL_FLAGS
+            });
+            return;
+        }
+
+        await safeReply(interaction, {
+            content: formatOtpResult(selectedInbox, otpPayload),
+            flags: EPHEMERAL_FLAGS
+        });
+        return;
+    }
+
+    if (interaction.customId.startsWith(EMAIL_DELETE_PREFIX)) {
+        const [, ownerId, inboxId] = interaction.customId.split('|');
+
+        if (interaction.user.id !== ownerId) {
+            await safeReply(interaction, { content: 'This panel belongs to another user.', flags: EPHEMERAL_FLAGS });
+            return;
+        }
+
+        const inboxes = listUserInboxes(interaction.user.id);
+        const selectedInbox = pickSelectedInbox(inboxes, inboxId);
+
+        if (!selectedInbox) {
+            await safeReply(interaction, {
+                content: 'No inbox selected to delete.',
+                flags: EPHEMERAL_FLAGS
+            });
+            return;
+        }
+
+        const removed = removeUserInbox({
+            userId: interaction.user.id,
+            inboxId: selectedInbox.inboxId
+        });
+
+        const panel = buildEmailPanelPayload({
+            userId: interaction.user.id,
+            introText: removed
+                ? `Deleted inbox email: ${formatCopyFriendly(selectedInbox.email)}`
+                : `Could not delete inbox email: ${formatCopyFriendly(selectedInbox.email)}`
+        });
+
+        await safeUpdate(interaction, {
+            content: panel.content,
+            components: panel.components
+        });
+        return;
+    }
+
     if (interaction.customId.startsWith(OPEN_SMS_PANEL_PREFIX)) {
         const [, maxPriceRaw] = interaction.customId.split('|');
         const maxPrice = maxPriceRaw ? Number(maxPriceRaw) : null;

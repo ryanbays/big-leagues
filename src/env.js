@@ -7,6 +7,7 @@ const CLIENT_ID = process.env.CLIENT_ID;
 const GUILD_ID = process.env.GUILD_ID;
 const SMSPOOL_API_KEY = process.env.SMSPOOL_API_KEY;
 const PROMO_API_KEY = process.env.PROMO_API_KEY;
+const EMAIL_DOMAIN = process.env.EMAIL_DOMAIN || 'rainserver.uk';
 
 const logger = createLogger('env');
 
@@ -31,5 +32,6 @@ module.exports = {
     GUILD_ID,
     SMSPOOL_API_KEY,
     PROMO_API_KEY,
+    EMAIL_DOMAIN,
     assertRequiredEnv
 };

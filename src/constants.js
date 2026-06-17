@@ -40,6 +40,11 @@ const SMS_GENERATE_PREFIX = 'generate';
 const OPEN_PROMO_PANEL_PREFIX = 'open_promo_panel';
 const PROMO_SELECT_PREFIX = 'promo_select';
 const PROMO_FETCH_PREFIX = 'promo_fetch';
+const EMAIL_SELECT_PREFIX = 'email_select';
+const EMAIL_CREATE_PREFIX = 'email_create';
+const EMAIL_REFRESH_PREFIX = 'email_refresh';
+const EMAIL_OTP_PREFIX = 'email_otp';
+const EMAIL_DELETE_PREFIX = 'email_delete';
 const REFRESH_PREFIX = 'refresh';
 const REFUND_PREFIX = 'refund';
 const EPHEMERAL_FLAGS = MessageFlags.Ephemeral;
@@ -56,6 +61,11 @@ module.exports = {
     OPEN_PROMO_PANEL_PREFIX,
     PROMO_SELECT_PREFIX,
     PROMO_FETCH_PREFIX,
+    EMAIL_SELECT_PREFIX,
+    EMAIL_CREATE_PREFIX,
+    EMAIL_REFRESH_PREFIX,
+    EMAIL_OTP_PREFIX,
+    EMAIL_DELETE_PREFIX,
     REFRESH_PREFIX,
     REFUND_PREFIX,
     EPHEMERAL_FLAGS
