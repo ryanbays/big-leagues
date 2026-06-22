@@ -17,6 +17,14 @@ const {
     REFUND_PREFIX,
     EPHEMERAL_FLAGS
 } = require('../constants');
+const {
+    ActionRowBuilder,
+    ButtonBuilder,
+    ButtonStyle,
+    ModalBuilder,
+    TextInputBuilder,
+    TextInputStyle
+} = require('discord.js');
 
 const { activeOrders } = require('../state');
 const { createLogger } = require('../logger');
@@ -24,7 +32,6 @@ const { isAllowedService, serviceLabelFromId } = require('../serviceUtils');
 const { buySmsNumber, checkSms, cancelSms } = require('../smspool/client');
 const { extractSmsText, isRefundSuccess } = require('../smspool/parsing');
 const { fetchPromoServices, fetchPromoCode } = require('./promo');
-const { getOtp } = require('../gotp-api');
 const { EMAIL_DOMAIN } = require('../env');
 
 const {
@@ -53,12 +60,21 @@ const {
     safeDeferUpdate,
     isUnknownInteractionError
 } = require('./safe');
+const fs = require('fs');
+const path = require('path');
+const { Worker } = require('worker_threads');
 
 const { addOrder, removeOrder, listOrders } = require('../db/orders');
 const { addUserInbox, listUserInboxes, removeUserInbox } = require('../db/inboxes');
+const { addLogin, removeLogin, getLogin } = require('../db/fairfx');
 
 const logger = createLogger('discord/handlers');
 const assert = require('assert').strict;
+
+const FAIRFX_OTP_BUTTON_PREFIX = 'fairfx_otp_enter';
+const FAIRFX_OTP_MODAL_PREFIX = 'fairfx_otp_modal';
+const FAIRFX_OTP_INPUT_ID = 'fairfx_otp_input';
+const pendingFairFxLogins = new Map();
 
 function parseDateInput(raw) {
     if (!raw) return null;
@@ -197,6 +213,28 @@ function formatOtpResult(inboxRecord, otpPayload) {
 
     if (Number.isFinite(timestamp)) {
         lines.push(`Received: ${new Date(timestamp * 1000).toLocaleString()}`);
+    }
+
+    return lines.join('\n');
+}
+
+function formatWorkerConsoleLog(logLines, maxChars = 900) {
+    if (!Array.isArray(logLines) || logLines.length === 0) {
+        return 'No worker console logs captured.';
+    }
+
+    const lines = [];
+    let used = 0;
+
+    for (let i = logLines.length - 1; i >= 0; i -= 1) {
+        const line = String(logLines[i]);
+        const nextLen = line.length + (lines.length ? 1 : 0);
+        if (used + nextLen > maxChars) {
+            break;
+        }
+
+        lines.unshift(line);
+        used += nextLen;
     }
 
     return lines.join('\n');
@@ -547,7 +585,158 @@ async function handleFairFXCommand(interaction) {
     if (sub === "login") {
         const email = interaction.options.getString('email');
         const password = interaction.options.getString('password');
+        const save = interaction.options.getBoolean('save') || false;
+        if (!email || !password) {
+            await safeEditReply(interaction, {
+                content: 'Email and password are required for login.',
+                flags: EPHEMERAL_FLAGS
+            });
+            return;
+        }
 
+        if (save) {
+            addLogin({ userId: interaction.user.id, email, password });
+        }
+
+        await safeEditReply(interaction, {
+            content: `${save ? `FairFX credentials saved for ${email}.` : `Using provided FairFX credentials for ${email}.`}\nStarting FairFX login process...`,
+            flags: EPHEMERAL_FLAGS
+        });
+
+        const statesDir = path.resolve(__dirname, '../../data/states');
+        fs.mkdirSync(statesDir, { recursive: true });
+
+        const payload = {
+            email,
+            password,
+            storagePath: path.join(statesDir, `fairfx_state_${interaction.user.id}.json`)
+        };
+        logger.trace('Starting FairFX worker thread.', { payload: { email, storagePath: payload.storagePath } });
+
+        const workerPath = path.resolve(__dirname, '../fairfx/login.js');
+        const worker = new Worker(workerPath, {
+            stdout: true,
+            stderr: true
+        });
+
+        const workerLogLines = [];
+        const captureLogLine = (source, chunk) => {
+            const text = String(chunk || '');
+            for (const rawLine of text.split(/\r?\n/)) {
+                const line = rawLine.trim();
+                if (!line) continue;
+                workerLogLines.push(`[${source}] ${line}`);
+            }
+
+            if (workerLogLines.length > 200) {
+                workerLogLines.splice(0, workerLogLines.length - 200);
+            }
+        };
+
+        if (worker.stdout) {
+            worker.stdout.on('data', (chunk) => captureLogLine('stdout', chunk));
+        }
+        if (worker.stderr) {
+            worker.stderr.on('data', (chunk) => captureLogLine('stderr', chunk));
+        }
+
+        // Helper: await a worker message that satisfies predicate (with timeout)
+        const waitForWorkerMessage = (predicate, timeoutMs = OTP_TIMEOUT_MS) =>
+            new Promise((resolve, reject) => {
+                let timer;
+                const onMessage = (msg) => {
+                    try {
+                        if (predicate(msg)) {
+                            cleanup();
+                            resolve(msg);
+                        }
+                    } catch (e) {
+                        // ignore predicate errors
+                    }
+                };
+                const onError = (err) => {
+                    cleanup();
+                    reject(err);
+                };
+                const onExit = (code) => {
+                    cleanup();
+                    reject(new Error(`Worker exited with code ${code}`));
+                };
+                const cleanup = () => {
+                    worker.off('message', onMessage);
+                    worker.off('error', onError);
+                    worker.off('exit', onExit);
+                    if (timer) clearTimeout(timer);
+                };
+                worker.on('message', onMessage);
+                worker.on('error', onError);
+                worker.on('exit', onExit);
+                timer = setTimeout(() => {
+                    cleanup();
+                    reject(new Error('Timed out waiting for worker message'));
+                }, timeoutMs);
+            });
+        
+        logger.trace('FairFX login worker started, awaiting OTP request.', { userId: interaction.user.id });
+
+        let handedOffToUserOtpEntry = false;
+
+        try {
+            worker.postMessage({ type: 'start', payload });
+
+            await waitForWorkerMessage((m) => m && m.type === 'otp_request');
+
+            const existing = pendingFairFxLogins.get(interaction.user.id);
+            if (existing) {
+                try { existing.worker.terminate(); } catch (e) { /* ignore */ }
+                if (existing.timeoutHandle) {
+                    clearTimeout(existing.timeoutHandle);
+                }
+                pendingFairFxLogins.delete(interaction.user.id);
+            }
+
+            const resultPromise = waitForWorkerMessage((m) => m && (m.type === 'success' || m.type === 'error'))
+                .then((result) => ({ ok: true, result }))
+                .catch((error) => ({ ok: false, error }));
+            const timeoutHandle = setTimeout(() => {
+                const pending = pendingFairFxLogins.get(interaction.user.id);
+                if (!pending) return;
+
+                pendingFairFxLogins.delete(interaction.user.id);
+                try { pending.worker.terminate(); } catch (e) { /* ignore */ }
+            }, OTP_TIMEOUT_MS + 15_000);
+
+            pendingFairFxLogins.set(interaction.user.id, {
+                worker,
+                resultPromise,
+                workerLogLines,
+                timeoutHandle
+            });
+            handedOffToUserOtpEntry = true;
+
+            const otpButton = new ButtonBuilder()
+                .setCustomId(`${FAIRFX_OTP_BUTTON_PREFIX}|${interaction.user.id}`)
+                .setLabel('Enter FairFX OTP')
+                .setStyle(ButtonStyle.Primary);
+
+            await safeFollowUp(interaction, {
+                content: 'FairFX sent the OTP to your phone. Click the button below to enter it privately.',
+                components: [new ActionRowBuilder().addComponents(otpButton)],
+                flags: EPHEMERAL_FLAGS
+            });
+        } catch (err) {
+            logger.warn('FairFX worker communication failed.', { error: err && err.message ? err.message : String(err) });
+            const logText = formatWorkerConsoleLog(workerLogLines);
+            await safeFollowUp(interaction, {
+                content: `FairFX login flow failed: ${err && err.message ? err.message : String(err)}\n\nWorker console log:\n${logText}`,
+                flags: EPHEMERAL_FLAGS
+            });
+            try { worker.terminate(); } catch (e) { /* ignore */ }
+        } finally {
+            if (!handedOffToUserOtpEntry) {
+                try { worker.terminate(); } catch (e) { /* ignore */ }
+            }
+        }
     }
 }
 
@@ -675,6 +864,37 @@ async function handleServiceSelect(interaction) {
 }
 
 async function handleButton(interaction) {
+    if (interaction.customId.startsWith(FAIRFX_OTP_BUTTON_PREFIX)) {
+        const [, ownerId] = interaction.customId.split('|');
+
+        if (interaction.user.id !== ownerId) {
+            await safeReply(interaction, { content: 'This OTP prompt belongs to another user.', flags: EPHEMERAL_FLAGS });
+            return;
+        }
+
+        if (!pendingFairFxLogins.get(ownerId)) {
+            await safeReply(interaction, { content: 'No pending FairFX login found. Start /fairfx login again.', flags: EPHEMERAL_FLAGS });
+            return;
+        }
+
+        const otpInput = new TextInputBuilder()
+            .setCustomId(FAIRFX_OTP_INPUT_ID)
+            .setLabel('FairFX OTP code')
+            .setPlaceholder('Enter 4-8 digits')
+            .setRequired(true)
+            .setStyle(TextInputStyle.Short)
+            .setMinLength(4)
+            .setMaxLength(8);
+
+        const modal = new ModalBuilder()
+            .setCustomId(`${FAIRFX_OTP_MODAL_PREFIX}|${ownerId}`)
+            .setTitle('Enter FairFX OTP')
+            .addComponents(new ActionRowBuilder().addComponents(otpInput));
+
+        await interaction.showModal(modal);
+        return;
+    }
+
     if (interaction.customId.startsWith(EMAIL_CREATE_PREFIX)) {
         const [, ownerId] = interaction.customId.split('|');
 
@@ -1043,6 +1263,78 @@ async function handleButton(interaction) {
     }
 }
 
+async function handleModalSubmit(interaction) {
+    if (!interaction.customId.startsWith(FAIRFX_OTP_MODAL_PREFIX)) {
+        return;
+    }
+
+    const [, ownerId] = interaction.customId.split('|');
+
+    if (interaction.user.id !== ownerId) {
+        await safeReply(interaction, { content: 'This OTP prompt belongs to another user.', flags: EPHEMERAL_FLAGS });
+        return;
+    }
+
+    const pending = pendingFairFxLogins.get(ownerId);
+    if (!pending) {
+        await safeReply(interaction, { content: 'No pending FairFX login found. Start /fairfx login again.', flags: EPHEMERAL_FLAGS });
+        return;
+    }
+
+    const otp = String(interaction.fields.getTextInputValue(FAIRFX_OTP_INPUT_ID) || '').trim();
+    if (!/^\d{4,8}$/.test(otp)) {
+        await safeReply(interaction, { content: 'OTP looks invalid. Enter 4-8 digits only.', flags: EPHEMERAL_FLAGS });
+        return;
+    }
+
+    const deferred = await safeDeferReply(interaction, { flags: EPHEMERAL_FLAGS });
+    if (!deferred) {
+        return;
+    }
+
+    pending.worker.postMessage({ type: 'otp', payload: { otp } });
+
+    try {
+        const outcome = await pending.resultPromise;
+        const logText = formatWorkerConsoleLog(pending.workerLogLines);
+
+        if (!outcome.ok) {
+            await safeEditReply(interaction, {
+                content: `FairFX login flow failed: ${outcome.error && outcome.error.message ? outcome.error.message : String(outcome.error)}\n\nWorker console log:\n${logText}`,
+                flags: EPHEMERAL_FLAGS
+            });
+            return;
+        }
+
+        const result = outcome.result;
+
+        if (result.type === 'success') {
+            await safeEditReply(interaction, {
+                content: `FairFX login successful.\n${result.payload && result.payload.message ? result.payload.message : ''}\n\nWorker console log:\n${logText}`,
+                flags: EPHEMERAL_FLAGS
+            });
+        } else {
+            await safeEditReply(interaction, {
+                content: `FairFX login failed: ${result.payload && result.payload.message ? result.payload.message : 'Unknown error'}\n\nWorker console log:\n${logText}`,
+                flags: EPHEMERAL_FLAGS
+            });
+        }
+    } catch (err) {
+        const logText = formatWorkerConsoleLog(pending.workerLogLines);
+        await safeEditReply(interaction, {
+            content: `FairFX login flow failed: ${err && err.message ? err.message : String(err)}\n\nWorker console log:\n${logText}`,
+            flags: EPHEMERAL_FLAGS
+        });
+    } finally {
+        if (pending.timeoutHandle) {
+            clearTimeout(pending.timeoutHandle);
+        }
+
+        pendingFairFxLogins.delete(ownerId);
+        try { pending.worker.terminate(); } catch (e) { /* ignore */ }
+    }
+}
+
 async function generateSMSAndTrack(interaction, serviceId, maxPrice) {
     try {
         logger.debug('Starting SMS purchase request.', {
@@ -1219,6 +1511,11 @@ async function handleInteraction(interaction) {
 
         if (interaction.isButton()) {
             await handleButton(interaction);
+            return;
+        }
+
+        if (interaction.isModalSubmit()) {
+            await handleModalSubmit(interaction);
         }
     } catch (err) {
         if (isUnknownInteractionError(err)) {

@@ -1,9 +1,15 @@
 services:
-  app:
+  discord-bot:
     build: .
     volumes:
       - db:/app/data
     restart: unless-stopped
+    # depends_on:
+    #  - dolphin-anty
+    environment:
+      DOLPHIN_API: "http://dolphin-anty:35000"
+
 
 volumes:
   db:
+#  dolphin-data:

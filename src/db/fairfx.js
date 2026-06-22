@@ -10,7 +10,7 @@ const { createLogger } = require('../logger');
 
 const logger = createLogger('db/fairfx');
 
-function addLogin({userId, email, password}) {
+function addLogin({ userId, email, password }) {
     if (!userId || !email) {
         throw new Error('addOrder: orderId required');
     }
@@ -36,18 +36,18 @@ function removeLogin(userId) {
     if (!userId) {
         throw new Error('removeLogin: userId required');
     }
-    logger.trace('Removing login', {userId: String(userId)});
+    logger.trace('Removing login', { userId: String(userId) });
 
     deleteFairFXLogin.run(String(userId))
 
-    logger.trace('Login removed', {userId: String(userId)});
+    logger.trace('Login removed', { userId: String(userId) });
 }
 
 function getLogin(userId) {
     if (!userId) {
         throw new Error('getLogin: userId required');
     }
-    logger.trace('Retrieving login', {userId: String(userId)});
+    logger.trace('Retrieving login', { userId: String(userId) });
 
     return getFairFXLogin.get(String(userId)) || null;
 }

@@ -158,6 +158,12 @@ const commands = [
                         name: 'password',
                         description: 'Password',
                         type: 3,
+                        required: true
+                    },
+                    {
+                        name: 'save',
+                        description: 'Save credentials for future use !IN PLAIN TEXT! (optional)',
+                        type: 5,
                         required: false
                     }
                 ]
