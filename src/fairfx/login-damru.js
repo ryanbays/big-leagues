@@ -16,6 +16,10 @@ const http = axios.create({
 let otpBuffer = null;
 let poolInitialized = false;
 
+function buildRunStamp() {
+    return new Date().toISOString().replace(/[:.]/g, '-');
+}
+
 function log(...parts) {
     const message = parts
         .map((part) => (typeof part === 'string' ? part : JSON.stringify(part)))
@@ -97,19 +101,65 @@ function writeCompatibilityStorage(storagePath, metadata) {
     );
 }
 
+async function captureStepScreenshot(device, screenshotDir, stepName, stepIndex) {
+    if (!device || !screenshotDir) {
+        return null;
+    }
+
+    const safeStepName = String(stepName || 'step').replace(/[^a-zA-Z0-9_-]/g, '_');
+    const fileName = `${String(stepIndex).padStart(2, '0')}_${safeStepName}.png`;
+    const outputPath = path.join(screenshotDir, fileName);
+
+    try {
+        const result = await damru.screenshot(device, { output_path: outputPath });
+        if (!result || result.success === false) {
+            const reason = result && (result.error || result.message)
+                ? result.error || result.message
+                : 'unknown reason';
+            log(`Screenshot failed for ${fileName}: ${reason}`);
+            return null;
+        }
+
+        const savedPath = result.path || outputPath;
+        log(`Saved screenshot: ${savedPath}`);
+        return savedPath;
+    } catch (error) {
+        log(`Screenshot error for ${fileName}: ${error.message || String(error)}`);
+        return null;
+    }
+}
+
 async function run(payload) {
     let device = null;
+    let screenshotDir = null;
+    let screenshotIndex = 1;
+
+    const snap = async (stepName) => {
+        const savedPath = await captureStepScreenshot(device, screenshotDir, stepName, screenshotIndex);
+        screenshotIndex += 1;
+        return savedPath;
+    };
 
     try {
         if (!payload || !payload.email || !payload.password) {
             throw new Error('Missing required payload fields: email and password');
         }
 
+        const statesRoot = payload && payload.storagePath
+            ? path.dirname(payload.storagePath)
+            : path.resolve(process.cwd(), 'data', 'states');
+        const screenshotsRoot = path.join(statesRoot, 'fairfx-login-screenshots');
+        const runId = buildRunStamp();
+        screenshotDir = path.join(screenshotsRoot, runId);
+        fs.mkdirSync(screenshotDir, { recursive: true });
+        log('Screenshot folder prepared', screenshotDir);
+
         log('Launching FairFX Damru session');
         await ensurePool();
 
         device = await damru.acquireDevice(45000);
         log('Using Damru device', device);
+        await snap('device_acquired');
 
         const navigateResult = await damru.navigate(device, FAIRFX_URL, {
             timeout: 60000,
@@ -119,6 +169,7 @@ async function run(payload) {
 
         await wait(2000);
         log('Opened FairFX login page');
+        await snap('login_page_opened');
 
         ensureResultSuccess(
             await postDamru('/api/type', {
@@ -131,6 +182,7 @@ async function run(payload) {
             }),
             'Failed typing email'
         );
+        await snap('email_entered');
 
         ensureResultSuccess(
             await postDamru('/api/press', {
@@ -140,6 +192,7 @@ async function run(payload) {
             }),
             'Failed submitting email step'
         );
+        await snap('email_submitted');
 
         ensureResultSuccess(
             await postDamru('/api/type', {
@@ -152,6 +205,7 @@ async function run(payload) {
             }),
             'Failed typing password'
         );
+        await snap('password_entered');
 
         ensureResultSuccess(
             await postDamru('/api/press', {
@@ -161,6 +215,7 @@ async function run(payload) {
             }),
             'Failed submitting password step'
         );
+        await snap('password_submitted');
 
         await wait(3000);
 
@@ -173,6 +228,7 @@ async function run(payload) {
             }),
             'OTP field did not appear'
         );
+        await snap('otp_prompt_visible');
 
         log('Waiting for OTP challenge');
         if (parentPort) {
@@ -192,6 +248,7 @@ async function run(payload) {
             }),
             'Failed typing OTP'
         );
+        await snap('otp_entered');
 
         // Remember browser is optional; do not fail flow if this action cannot be performed.
         try {
@@ -201,8 +258,10 @@ async function run(payload) {
                 retries: 2,
                 wait_visible_timeout: 7000
             });
+            await snap('remember_browser_clicked');
         } catch (error) {
             log('Remember browser click skipped', error.message || String(error));
+            await snap('remember_browser_skipped');
         }
 
         ensureResultSuccess(
@@ -213,6 +272,7 @@ async function run(payload) {
             }),
             'Failed submitting OTP step'
         );
+        await snap('otp_submitted');
 
         await wait(5000);
 
@@ -225,7 +285,9 @@ async function run(payload) {
         );
 
         const currentUrl = locationResult.result || '';
+        await snap('post_login_check');
         if (String(currentUrl).includes('login')) {
+            await snap('login_failed_still_on_login');
             if (parentPort) {
                 parentPort.postMessage({
                     type: 'error',
@@ -238,8 +300,11 @@ async function run(payload) {
         writeCompatibilityStorage(payload.storagePath, {
             mode: 'fairfx-login',
             currentUrl,
-            device
+            device,
+            screenshotDir
         });
+
+        await snap('login_success');
 
         if (parentPort) {
             parentPort.postMessage({
@@ -252,6 +317,7 @@ async function run(payload) {
     } catch (error) {
         const message = error && error.message ? error.message : String(error);
         console.error('Damru FairFX worker error:', error);
+        await snap('error_state');
 
         if (parentPort) {
             parentPort.postMessage({ type: 'error', payload: { message } });

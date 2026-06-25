@@ -684,7 +684,16 @@ async function handleFairFXCommand(interaction) {
         try {
             worker.postMessage({ type: 'start', payload });
 
-            await waitForWorkerMessage((m) => m && m.type === 'otp_request');
+            const initialWorkerMessage = await waitForWorkerMessage(
+                (m) => m && (m.type === 'otp_request' || m.type === 'error')
+            );
+
+            if (initialWorkerMessage.type === 'error') {
+                const message = initialWorkerMessage.payload && initialWorkerMessage.payload.message
+                    ? initialWorkerMessage.payload.message
+                    : 'Worker failed before OTP request';
+                throw new Error(message);
+            }
 
             const existing = pendingFairFxLogins.get(interaction.user.id);
             if (existing) {

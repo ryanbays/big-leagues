@@ -175,257 +175,255 @@ def cleanup():
         return jsonify({"status": "cleaned up"}), 200
     except Exception as e:
         logger.error(f"Cleanup error: {e}")
+        return jsonify({"error": str(e)}), 500
 
 
-        @app.route("/api/type", methods=["POST"])
-        def type_input():
-            """
-            Type text into an input field with human-like delays.
-    
-            Request body:
-            {
-                "selector": "input[id='username']",
-                "text": "user@example.com",
-                "device": "pixel_8_pro",
-                "human_like": true,
-                "delay_min": 45,
-                "delay_max": 110
-            }
-            """
-            try:
-                data = request.get_json()
-                if not data or "selector" not in data or "text" not in data:
-                    return jsonify({"error": "Missing 'selector' or 'text'"}), 400
+@app.route("/api/type", methods=["POST"])
+def type_input():
+    """
+    Type text into an input field with human-like delays.
 
-                result = run_async(
-                    manager.type_input(
-                        selector=data.get("selector"),
-                        text=data.get("text"),
-                        device=data.get("device", "random"),
-                        human_like=data.get("human_like", True),
-                        delay_min=data.get("delay_min", 45),
-                        delay_max=data.get("delay_max", 110),
-                    )
-                )
-                return jsonify(result), 200 if result.get("success") else 400
-            except Exception as e:
-                logger.error(f"Type endpoint error: {e}")
-                return jsonify({"error": str(e)}), 500
+    Request body:
+    {
+        "selector": "input[id='username']",
+        "text": "user@example.com",
+        "device": "pixel_8_pro",
+        "human_like": true,
+        "delay_min": 45,
+        "delay_max": 110
+    }
+    """
+    try:
+        data = request.get_json()
+        if not data or "selector" not in data or "text" not in data:
+            return jsonify({"error": "Missing 'selector' or 'text'"}), 400
 
-
-        @app.route("/api/click", methods=["POST"])
-        def click():
-            """
-            Click an element with retry logic.
-    
-            Request body:
-            {
-                "selector": "button[type='submit']",
-                "device": "pixel_8_pro",
-                "retries": 3,
-                "wait_visible_timeout": 7000
-            }
-            """
-            try:
-                data = request.get_json()
-                if not data or "selector" not in data:
-                    return jsonify({"error": "Missing 'selector'"}), 400
-
-                result = run_async(
-                    manager.click(
-                        selector=data.get("selector"),
-                        device=data.get("device", "random"),
-                        retries=data.get("retries", 3),
-                        wait_visible_timeout=data.get("wait_visible_timeout", 7000),
-                    )
-                )
-                return jsonify(result), 200 if result.get("success") else 400
-            except Exception as e:
-                logger.error(f"Click endpoint error: {e}")
-                return jsonify({"error": str(e)}), 500
+        result = run_async(
+            manager.type_input(
+                selector=data.get("selector"),
+                text=data.get("text"),
+                device=data.get("device", "random"),
+                human_like=data.get("human_like", True),
+                delay_min=data.get("delay_min", 45),
+                delay_max=data.get("delay_max", 110),
+            )
+        )
+        return jsonify(result), 200 if result.get("success") else 400
+    except Exception as e:
+        logger.error(f"Type endpoint error: {e}")
+        return jsonify({"error": str(e)}), 500
 
 
-        @app.route("/api/wait", methods=["POST"])
-        def wait_for_element():
-            """
-            Wait for an element to reach a specific state.
-    
-            Request body:
-            {
-                "selector": "input[id='code']",
-                "device": "pixel_8_pro",
-                "timeout": 10000,
-                "state": "visible"
-            }
-            """
-            try:
-                data = request.get_json()
-                if not data or "selector" not in data:
-                    return jsonify({"error": "Missing 'selector'"}), 400
+@app.route("/api/click", methods=["POST"])
+def click():
+    """
+    Click an element with retry logic.
 
-                result = run_async(
-                    manager.wait_for_element(
-                        selector=data.get("selector"),
-                        device=data.get("device", "random"),
-                        timeout=data.get("timeout", 10000),
-                        state=data.get("state", "visible"),
-                    )
-                )
-                return jsonify(result), 200 if result.get("success") else 400
-            except Exception as e:
-                logger.error(f"Wait endpoint error: {e}")
-                return jsonify({"error": str(e)}), 500
+    Request body:
+    {
+        "selector": "button[type='submit']",
+        "device": "pixel_8_pro",
+        "retries": 3,
+        "wait_visible_timeout": 7000
+    }
+    """
+    try:
+        data = request.get_json()
+        if not data or "selector" not in data:
+            return jsonify({"error": "Missing 'selector'"}), 400
 
-
-        @app.route("/api/fill", methods=["POST"])
-        def fill_input():
-            """
-            Fill a form field (select all + type with human behavior).
-    
-            Request body:
-            {
-                "selector": "input[id='username']",
-                "value": "user@example.com",
-                "device": "pixel_8_pro",
-                "human_like": true
-            }
-            """
-            try:
-                data = request.get_json()
-                if not data or "selector" not in data or "value" not in data:
-                    return jsonify({"error": "Missing 'selector' or 'value'"}), 400
-
-                result = run_async(
-                    manager.fill_input(
-                        selector=data.get("selector"),
-                        value=data.get("value"),
-                        device=data.get("device", "random"),
-                        human_like=data.get("human_like", True),
-                    )
-                )
-                return jsonify(result), 200 if result.get("success") else 400
-            except Exception as e:
-                logger.error(f"Fill endpoint error: {e}")
-                return jsonify({"error": str(e)}), 500
+        result = run_async(
+            manager.click(
+                selector=data.get("selector"),
+                device=data.get("device", "random"),
+                retries=data.get("retries", 3),
+                wait_visible_timeout=data.get("wait_visible_timeout", 7000),
+            )
+        )
+        return jsonify(result), 200 if result.get("success") else 400
+    except Exception as e:
+        logger.error(f"Click endpoint error: {e}")
+        return jsonify({"error": str(e)}), 500
 
 
-        @app.route("/api/submit", methods=["POST"])
-        def submit_form():
-            """
-            Submit a form by pressing Enter.
-    
-            Request body:
-            {
-                "selector": "form[id='loginForm']",
-                "device": "pixel_8_pro"
-            }
-            """
-            try:
-                data = request.get_json()
-                if not data or "selector" not in data:
-                    return jsonify({"error": "Missing 'selector'"}), 400
+@app.route("/api/wait", methods=["POST"])
+def wait_for_element():
+    """
+    Wait for an element to reach a specific state.
 
-                result = run_async(
-                    manager.submit_form(
-                        selector=data.get("selector"),
-                        device=data.get("device", "random"),
-                    )
-                )
-                return jsonify(result), 200 if result.get("success") else 400
-            except Exception as e:
-                logger.error(f"Submit endpoint error: {e}")
-                return jsonify({"error": str(e)}), 500
+    Request body:
+    {
+        "selector": "input[id='code']",
+        "device": "pixel_8_pro",
+        "timeout": 10000,
+        "state": "visible"
+    }
+    """
+    try:
+        data = request.get_json()
+        if not data or "selector" not in data:
+            return jsonify({"error": "Missing 'selector'"}), 400
 
-
-        @app.route("/api/press", methods=["POST"])
-        def press_key():
-            """
-            Press a keyboard key.
-    
-            Request body:
-            {
-                "key": "Enter",
-                "device": "pixel_8_pro",
-                "count": 1
-            }
-    
-            Valid keys: Enter, Tab, Escape, Control+A, Control+C, etc.
-            """
-            try:
-                data = request.get_json()
-                if not data or "key" not in data:
-                    return jsonify({"error": "Missing 'key'"}), 400
-
-                result = run_async(
-                    manager.press_key(
-                        key=data.get("key"),
-                        device=data.get("device", "random"),
-                        count=data.get("count", 1),
-                    )
-                )
-                return jsonify(result), 200 if result.get("success") else 400
-            except Exception as e:
-                logger.error(f"Press endpoint error: {e}")
-                return jsonify({"error": str(e)}), 500
+        result = run_async(
+            manager.wait_for_element(
+                selector=data.get("selector"),
+                device=data.get("device", "random"),
+                timeout=data.get("timeout", 10000),
+                state=data.get("state", "visible"),
+            )
+        )
+        return jsonify(result), 200 if result.get("success") else 400
+    except Exception as e:
+        logger.error(f"Wait endpoint error: {e}")
+        return jsonify({"error": str(e)}), 500
 
 
-        @app.route("/api/execute", methods=["POST"])
-        def execute_script():
-            """
-            Execute JavaScript on the page.
-    
-            Request body:
-            {
-                "script": "document.title",
-                "device": "pixel_8_pro"
-            }
-            """
-            try:
-                data = request.get_json()
-                if not data or "script" not in data:
-                    return jsonify({"error": "Missing 'script'"}), 400
+@app.route("/api/fill", methods=["POST"])
+def fill_input():
+    """
+    Fill a form field (select all + type with human behavior).
 
-                result = run_async(
-                    manager.execute_script(
-                        script=data.get("script"),
-                        device=data.get("device", "random"),
-                    )
-                )
-                return jsonify(result), 200 if result.get("success") else 400
-            except Exception as e:
-                logger.error(f"Execute endpoint error: {e}")
-                return jsonify({"error": str(e)}), 500
+    Request body:
+    {
+        "selector": "input[id='username']",
+        "value": "user@example.com",
+        "device": "pixel_8_pro",
+        "human_like": true
+    }
+    """
+    try:
+        data = request.get_json()
+        if not data or "selector" not in data or "value" not in data:
+            return jsonify({"error": "Missing 'selector' or 'value'"}), 400
 
-
-        @app.route("/api/content", methods=["POST"])
-        def get_page_content():
-            """
-            Get page content or extract specific elements.
-    
-            Request body:
-            {
-                "selectors": {
-                    "title": "h1",
-                    "error": ".error-message"
-                },
-                "device": "pixel_8_pro"
-            }
-            """
-            try:
-                data = request.get_json() or {}
-
-                result = run_async(
-                    manager.get_page_content(
-                        selectors=data.get("selectors"),
-                        device=data.get("device", "random"),
-                    )
-                )
-                return jsonify(result), 200 if result.get("success") else 400
-            except Exception as e:
-                logger.error(f"Content endpoint error: {e}")
-                return jsonify({"error": str(e)}), 500
+        result = run_async(
+            manager.fill_input(
+                selector=data.get("selector"),
+                value=data.get("value"),
+                device=data.get("device", "random"),
+                human_like=data.get("human_like", True),
+            )
+        )
+        return jsonify(result), 200 if result.get("success") else 400
+    except Exception as e:
+        logger.error(f"Fill endpoint error: {e}")
+        return jsonify({"error": str(e)}), 500
 
 
+@app.route("/api/submit", methods=["POST"])
+def submit_form():
+    """
+    Submit a form by pressing Enter.
+
+    Request body:
+    {
+        "selector": "form[id='loginForm']",
+        "device": "pixel_8_pro"
+    }
+    """
+    try:
+        data = request.get_json()
+        if not data or "selector" not in data:
+            return jsonify({"error": "Missing 'selector'"}), 400
+
+        result = run_async(
+            manager.submit_form(
+                selector=data.get("selector"),
+                device=data.get("device", "random"),
+            )
+        )
+        return jsonify(result), 200 if result.get("success") else 400
+    except Exception as e:
+        logger.error(f"Submit endpoint error: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/press", methods=["POST"])
+def press_key():
+    """
+    Press a keyboard key.
+
+    Request body:
+    {
+        "key": "Enter",
+        "device": "pixel_8_pro",
+        "count": 1
+    }
+
+    Valid keys: Enter, Tab, Escape, Control+A, Control+C, etc.
+    """
+    try:
+        data = request.get_json()
+        if not data or "key" not in data:
+            return jsonify({"error": "Missing 'key'"}), 400
+
+        result = run_async(
+            manager.press_key(
+                key=data.get("key"),
+                device=data.get("device", "random"),
+                count=data.get("count", 1),
+            )
+        )
+        return jsonify(result), 200 if result.get("success") else 400
+    except Exception as e:
+        logger.error(f"Press endpoint error: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/execute", methods=["POST"])
+def execute_script():
+    """
+    Execute JavaScript on the page.
+
+    Request body:
+    {
+        "script": "document.title",
+        "device": "pixel_8_pro"
+    }
+    """
+    try:
+        data = request.get_json()
+        if not data or "script" not in data:
+            return jsonify({"error": "Missing 'script'"}), 400
+
+        result = run_async(
+            manager.execute_script(
+                script=data.get("script"),
+                device=data.get("device", "random"),
+            )
+        )
+        return jsonify(result), 200 if result.get("success") else 400
+    except Exception as e:
+        logger.error(f"Execute endpoint error: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/content", methods=["POST"])
+def get_page_content():
+    """
+    Get page content or extract specific elements.
+
+    Request body:
+    {
+        "selectors": {
+            "title": "h1",
+            "error": ".error-message"
+        },
+        "device": "pixel_8_pro"
+    }
+    """
+    try:
+        data = request.get_json() or {}
+
+        result = run_async(
+            manager.get_page_content(
+                selectors=data.get("selectors"),
+                device=data.get("device", "random"),
+            )
+        )
+        return jsonify(result), 200 if result.get("success") else 400
+    except Exception as e:
+        logger.error(f"Content endpoint error: {e}")
         return jsonify({"error": str(e)}), 500
 
 
