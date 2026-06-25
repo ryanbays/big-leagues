@@ -1,0 +1,1 @@
+{"schemaVersion":2,"mediaType":"application/vnd.oci.image.index.v1+json","manifests":[{"mediaType":"application/vnd.oci.image.manifest.v1+json","digest":"sha256:1167599e943ce23df5a3710af8738e3ced032bcb1975a811d5483bf6a95d3ac7","size":753,"annotations":{"io.containerd.image.name":"docker.io/library/damru-redroid:latest","org.opencontainers.image.ref.name":"latest"}}]}

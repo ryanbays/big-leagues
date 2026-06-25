@@ -1,6 +1,10 @@
-const { chromium } = require('playwright');
 const { parentPort } = require('worker_threads');
-const { safeClick, typeHuman, wait } = require('../playwright/helpers.js');
+const {
+    safeClick,
+    typeHuman,
+    wait,
+    startChromiumBrowserSession
+} = require('../playwright/helpers.js');
 
 const FAIRFX_URL = 'https://dashboard.fairfx.com/login/';
 
@@ -61,15 +65,8 @@ async function run(payload) {
 
         log('Launching FairFX browser session');
 
-        browser = await chromium.launch({
-            headless: true,
-            args: [
-                '--no-sandbox',
-                '--disable-setuid-sandbox',
-                '--disable-blink-features=AutomationControlled',
-                '--disable-infobars',
-                '--window-size=1280,720'
-            ]
+        browser = await startChromiumBrowserSession({
+            headless
         });
 
         const context = await browser.newContext({

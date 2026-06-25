@@ -1,15 +1,50 @@
 services:
   discord-bot:
-    build: .
+    build: 
+      context: .
+      dockerfile: Dockerfile
     volumes:
       - db:/app/data
     restart: unless-stopped
-    # depends_on:
-    #  - dolphin-anty
+    depends_on:
+      - damru-pool
     environment:
-      DOLPHIN_API: "http://dolphin-anty:35000"
+      DAMRU_API_URL: http://damru-pool:5000
+
+  damru-redroid:
+    image: damru-redroid:latest
+    privileged: true
+    volumes:
+      - damru-data:/data
+      - /dev/binderfs:/dev/binderfs
+    environment:
+      - androidboot.redroid_width=1080
+      - androidboot.redroid_height=2400
+      - androidboot.redroid_dpi=480
+    restart: unless-stopped
+    ports:
+      - "5555:5555"
+
+  damru-pool:
+    build:
+      context: ./damru-service
+      dockerfile: Dockerfile
+    ports:
+      - "5000:5000"
+    environment:
+      REDROID_CPUS: "2.0"
+      REDROID_MEMORY: "2g"
+      NUM_DEVICES: 2
+      REDROID_HOST: damru-redroid
+      REDROID_PORT: 5555
+    depends_on:
+      - damru-redroid
+    restart: unless-stopped
+    volumes:
+      - damru-pool-data:/home/damru
 
 
 volumes:
   db:
-#  dolphin-data:
+  damru-data:
+  damru-pool-data:
