@@ -1,5 +1,5 @@
 services:
-  app:
+  discord-bot:
     build: .
     volumes:
       - db:/app/data

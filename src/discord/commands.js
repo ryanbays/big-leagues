@@ -132,6 +132,43 @@ const commands = [
                 ]
             }
         ]
+    },
+    {
+        name: 'fairfx',
+        description: 'Check FairFX card status and transactions',
+        options: [
+            {
+                name: 'check',
+                description: 'Check FairFX card status and transactions',
+                type: 1,
+                options: []
+            },
+            {
+                name: 'login',
+                description: 'Add FairFX credentials',
+                type: 1,
+                options: [
+                    {
+                        name: 'email',
+                        description: 'Email address',
+                        type: 3,
+                        required: true
+                    },
+                    {
+                        name: 'password',
+                        description: 'Password',
+                        type: 3,
+                        required: true
+                    },
+                    {
+                        name: 'save',
+                        description: 'Save credentials for future use !IN PLAIN TEXT! (optional)',
+                        type: 5,
+                        required: false
+                    }
+                ]
+            }
+        ]
     }
 ];
 

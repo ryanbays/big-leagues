@@ -1,5 +1,6 @@
 const db = require('../db');
 
+// Order tracking
 const insertOrder = db.prepare(`
     INSERT INTO orders (
         orderId,
@@ -42,6 +43,7 @@ const listStmt = db.prepare(`
     ORDER BY createdAt;
 `);
 
+// OTP Emails
 const insertUserInbox = db.prepare(`
     INSERT INTO user_inboxes (
         inboxId,
@@ -94,6 +96,34 @@ const deleteUserInboxByUserStmt = db.prepare(`
       AND userId = ?;
 `);
 
+// FairFX logins
+const insertFairFXLogin = db.prepare(`
+    INSERT INTO fairfx_logins (
+        userId, 
+        email, 
+        password
+    ) 
+    VALUES (
+        @userId, 
+        @email, 
+        @password)
+    ON CONFLICT(userId) DO UPDATE SET
+        email = excluded.email,
+        password = excluded.password;
+`);
+
+const getFairFXLogin = db.prepare(`
+    SELECT email, password
+    FROM fairfx_logins
+    WHERE userId = ?
+    LIMIT 1;
+`)
+
+const deleteFairFXLogin = db.prepare(`
+    DELETE FROM fairfx_logins
+    WHERE userId = ?;
+`)
+
 module.exports = {
     insertOrder,
     deleteOrder,
@@ -101,5 +131,8 @@ module.exports = {
     insertUserInbox,
     listUserInboxesByUserStmt,
     getUserInboxByIdStmt,
-    deleteUserInboxByUserStmt
+    deleteUserInboxByUserStmt,
+    insertFairFXLogin,
+    getFairFXLogin,
+    deleteFairFXLogin,
 }
