@@ -676,7 +676,7 @@ async function handleFairFXCommand(interaction) {
                     reject(new Error('Timed out waiting for worker message'));
                 }, timeoutMs);
             });
-        
+
         logger.trace('FairFX login worker started, awaiting OTP request.', { userId: interaction.user.id });
 
         let handedOffToUserOtpEntry = false;

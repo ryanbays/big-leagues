@@ -29,7 +29,6 @@ Dockerfile.*
 docker-compose*.yml
 
 # Environment
-.env*
 example.env
 .env.local
 
