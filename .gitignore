@@ -1,11 +1,97 @@
+# Environment and Configuration
 .env
-/data/
+.env.local
+.env.*.local
+example.env
+
+# Dependencies
 /node_modules/
-orders.index
+/venv/
+/env/
+*.egg-info/
+__pycache__/
+.Python
+
+# Package managers
 package-lock.json
+yarn.lock
+pip-log.txt
+pip-delete-this-directory.txt
+
+# IDE and Editor
 /.vscode/
 /.idea/
+.DS_Store
+Thumbs.db
+*.sublime-project
+*.sublime-workspace
+.vim/
+.emacs.d/
+*.swp
+*.swo
+*~
+.project
+.pydevproject
+.settings/
+*.code-workspace
+
+# Database files
 *.db
 *.db-shm
 *.db-wal
+orders.index
+
+# Logs and temp files
+*.log
+logs/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pip-log.txt
+.vscode-test/
+.vscode/settings.json
+
+# Build and dist
+/build/
+/dist/
+*.tgz
+*.tar
+*.tar.*
+
+# Test coverage
+coverage/
+.nyc_output/
+.coverage
+htmlcov/
+
+# Development
 /dolphin-config/
+/data/
+.cache/
+.eslintcache
+
+# OCI artifacts
+/blobs/
+/damru-oci-extract/
+oci-layout
+manifest.json
+
+# Docker
+.docker/
+Dockerfile.dev
+
+# OS files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+desktop.ini
+
+# CI/CD
+.github/workflows/.env
+.gitlab-ci.local.yml
+
+# Miscellaneous
+/tmp/
