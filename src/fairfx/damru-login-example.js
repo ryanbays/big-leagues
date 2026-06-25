@@ -224,8 +224,18 @@ async function run(payload) {
             'Failed reading post-login URL'
         );
 
-        const currentUrl = locationResult.result || '';
-        if (String(currentUrl).includes('login')) {
+        const currentUrl = String(locationResult.result || '').trim();
+        if (!currentUrl) {
+            if (parentPort) {
+                parentPort.postMessage({
+                    type: 'error',
+                    payload: { message: 'Damru did not return current URL. UI automation is not active yet.' }
+                });
+            }
+            return;
+        }
+
+        if (currentUrl.includes('login')) {
             if (parentPort) {
                 parentPort.postMessage({
                     type: 'error',

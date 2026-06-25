@@ -92,3 +92,6 @@ desktop.ini
 # CI/CD
 .github/workflows/.env
 .gitlab-ci.local.yml
+
+# Miscellaneous
+/tmp/

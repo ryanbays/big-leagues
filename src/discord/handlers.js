@@ -613,7 +613,16 @@ async function handleFairFXCommand(interaction) {
         };
         logger.trace('Starting FairFX worker thread.', { payload: { email, storagePath: payload.storagePath } });
 
-        const workerPath = path.resolve(__dirname, '../fairfx/login.js');
+        const fairfxWorkerMode = (process.env.FAIRFX_WORKER_MODE || '').toLowerCase();
+        const useDamruWorker = fairfxWorkerMode === 'damru' || (!fairfxWorkerMode && Boolean(process.env.DAMRU_API_URL));
+        const workerPath = path.resolve(
+            __dirname,
+            useDamruWorker ? '../fairfx/login-damru.js' : '../fairfx/login.js'
+        );
+        logger.trace('Selected FairFX worker implementation.', {
+            mode: useDamruWorker ? 'damru' : 'playwright',
+            workerPath
+        });
         const worker = new Worker(workerPath, {
             stdout: true,
             stderr: true

@@ -100,3 +100,5 @@ quick-setup-*.sh
 .DS_Store
 ehthumbs.db
 desktop.ini
+
+tmp/

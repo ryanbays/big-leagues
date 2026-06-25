@@ -134,10 +134,22 @@ async function run(payload) {
     let screenshotDir = null;
     let screenshotIndex = 1;
 
+    const baseStepDelayMs = Number(payload && payload.stepDelayMs) || Number(process.env.DAMRU_STEP_DELAY_MS) || 1200;
+    const initialPageLoadDelayMs = Number(payload && payload.initialPageLoadDelayMs) || Number(process.env.DAMRU_INITIAL_PAGE_LOAD_DELAY_MS) || 4500;
+    const postSubmitDelayMs = Number(payload && payload.postSubmitDelayMs) || Number(process.env.DAMRU_POST_SUBMIT_DELAY_MS) || 5000;
+
     const snap = async (stepName) => {
         const savedPath = await captureStepScreenshot(device, screenshotDir, stepName, screenshotIndex);
         screenshotIndex += 1;
         return savedPath;
+    };
+
+    const waitForSettle = async (reason, ms = baseStepDelayMs) => {
+        const delay = Math.max(0, Number(ms) || 0);
+        if (delay > 0) {
+            log(`Waiting ${delay}ms for ${reason}`);
+            await wait(delay);
+        }
     };
 
     try {
@@ -160,6 +172,7 @@ async function run(payload) {
         device = await damru.acquireDevice(45000);
         log('Using Damru device', device);
         await snap('device_acquired');
+        await waitForSettle('post_device_acquire');
 
         const navigateResult = await damru.navigate(device, FAIRFX_URL, {
             timeout: 60000,
@@ -167,9 +180,10 @@ async function run(payload) {
         });
         ensureResultSuccess(navigateResult, 'Failed to open FairFX login page');
 
-        await wait(2000);
+        await waitForSettle('initial_login_page_load', initialPageLoadDelayMs);
         log('Opened FairFX login page');
         await snap('login_page_opened');
+        await waitForSettle('login_page_render');
 
         ensureResultSuccess(
             await postDamru('/api/type', {
@@ -182,7 +196,9 @@ async function run(payload) {
             }),
             'Failed typing email'
         );
+        await waitForSettle('email_input_render');
         await snap('email_entered');
+        await waitForSettle('post_email_screenshot');
 
         ensureResultSuccess(
             await postDamru('/api/press', {
@@ -192,7 +208,9 @@ async function run(payload) {
             }),
             'Failed submitting email step'
         );
+        await waitForSettle('email_submit_navigation', postSubmitDelayMs);
         await snap('email_submitted');
+        await waitForSettle('post_email_submit_screenshot');
 
         ensureResultSuccess(
             await postDamru('/api/type', {
@@ -205,7 +223,9 @@ async function run(payload) {
             }),
             'Failed typing password'
         );
+        await waitForSettle('password_input_render');
         await snap('password_entered');
+        await waitForSettle('post_password_screenshot');
 
         ensureResultSuccess(
             await postDamru('/api/press', {
@@ -215,9 +235,9 @@ async function run(payload) {
             }),
             'Failed submitting password step'
         );
+        await waitForSettle('password_submit_navigation', postSubmitDelayMs);
         await snap('password_submitted');
-
-        await wait(3000);
+        await waitForSettle('pre_otp_wait');
 
         ensureResultSuccess(
             await postDamru('/api/wait', {
@@ -228,6 +248,7 @@ async function run(payload) {
             }),
             'OTP field did not appear'
         );
+        await waitForSettle('otp_prompt_render');
         await snap('otp_prompt_visible');
 
         log('Waiting for OTP challenge');
@@ -248,6 +269,7 @@ async function run(payload) {
             }),
             'Failed typing OTP'
         );
+        await waitForSettle('otp_input_render');
         await snap('otp_entered');
 
         // Remember browser is optional; do not fail flow if this action cannot be performed.
@@ -258,6 +280,7 @@ async function run(payload) {
                 retries: 2,
                 wait_visible_timeout: 7000
             });
+            await waitForSettle('remember_browser_toggle');
             await snap('remember_browser_clicked');
         } catch (error) {
             log('Remember browser click skipped', error.message || String(error));
@@ -272,9 +295,9 @@ async function run(payload) {
             }),
             'Failed submitting OTP step'
         );
+        await waitForSettle('otp_submit_navigation', postSubmitDelayMs);
         await snap('otp_submitted');
-
-        await wait(5000);
+        await waitForSettle('post_otp_submit_stabilize');
 
         const locationResult = ensureResultSuccess(
             await postDamru('/api/execute', {
@@ -284,9 +307,20 @@ async function run(payload) {
             'Failed reading post-login URL'
         );
 
-        const currentUrl = locationResult.result || '';
+        const currentUrl = String(locationResult.result || '').trim();
         await snap('post_login_check');
-        if (String(currentUrl).includes('login')) {
+        if (!currentUrl) {
+            await snap('login_failed_no_url_context');
+            if (parentPort) {
+                parentPort.postMessage({
+                    type: 'error',
+                    payload: { message: 'Damru did not return current URL. UI automation is not active yet.' }
+                });
+            }
+            return;
+        }
+
+        if (currentUrl.includes('login')) {
             await snap('login_failed_still_on_login');
             if (parentPort) {
                 parentPort.postMessage({

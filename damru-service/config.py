@@ -16,6 +16,9 @@ REDROID_CPUS = float(os.getenv("REDROID_CPUS", 2.0))
 REDROID_MEMORY = os.getenv("REDROID_MEMORY", "2g")
 CHROME_APK = os.getenv("CHROME_APK", None)
 
+# File output configuration
+SCREENSHOT_ROOT = os.getenv("SCREENSHOT_ROOT", "/home/damru/screenshots")
+
 # Default settings
 DEFAULT_DEVICE_PROFILE = "random"
 DEFAULT_TIMEOUT = 30000

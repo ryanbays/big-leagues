@@ -1,5 +1,7 @@
 import logging
 import asyncio
+import os
+import time
 from typing import Optional, Dict, Any
 import subprocess
 from config import (
@@ -7,6 +9,7 @@ from config import (
     NUM_DEVICES,
     DEFAULT_DEVICE_PROFILE,
     DEFAULT_TIMEOUT,
+    SCREENSHOT_ROOT,
 )
 
 logger = logging.getLogger(__name__)
@@ -23,6 +26,17 @@ class DamruManager:
         self.active_sessions = {}
         self.worker_count = 0
         self.max_workers = NUM_DEVICES
+        self.screenshot_root = SCREENSHOT_ROOT
+
+    def _resolve_output_path(self, output_path: str) -> str:
+        """Resolve and create a writable local path for screenshot output."""
+        if os.path.isabs(output_path):
+            resolved_path = output_path
+        else:
+            resolved_path = os.path.join(self.screenshot_root, output_path)
+
+        os.makedirs(os.path.dirname(resolved_path), exist_ok=True)
+        return resolved_path
 
     async def check_adb_connection(self) -> bool:
         """Check if ADB can connect to Redroid."""
@@ -103,7 +117,31 @@ class DamruManager:
             self.active_sessions[session_id] = {"url": url, "device": device}
             self.worker_count += 1
 
-            # Placeholder - actual Damru integration would go here
+            open_url = subprocess.run(
+                [
+                    "adb",
+                    "-s",
+                    self.adb_device,
+                    "shell",
+                    "am",
+                    "start",
+                    "-a",
+                    "android.intent.action.VIEW",
+                    "-d",
+                    url,
+                ],
+                capture_output=True,
+                text=True,
+                timeout=max(10, int(timeout / 1000) + 5),
+            )
+
+            if open_url.returncode != 0:
+                return {
+                    "success": False,
+                    "error": "Failed to open URL on Android device",
+                    "stderr": (open_url.stderr or "").strip(),
+                }
+
             result = {
                 "success": True,
                 "session_id": session_id,
@@ -113,7 +151,11 @@ class DamruManager:
             }
 
             if screenshot:
-                result["screenshot"] = f"/screenshots/{session_id}.png"
+                screenshot_result = await self.screenshot(
+                    device=device,
+                    output_path=f"navigate/{session_id}_{int(time.time())}.png",
+                )
+                result["screenshot"] = screenshot_result.get("path")
 
             return result
 
@@ -175,16 +217,48 @@ class DamruManager:
             Path to saved screenshot
         """
         try:
-            result = subprocess.run(
-                ["adb", "-s", self.adb_device, "shell", "screencap", "-p", "/sdcard/screen.png"],
+            remote_tmp = f"/sdcard/screen_{int(time.time() * 1000)}.png"
+            local_output_path = self._resolve_output_path(output_path)
+
+            capture = subprocess.run(
+                ["adb", "-s", self.adb_device, "shell", "screencap", "-p", remote_tmp],
                 capture_output=True,
+                text=True,
                 timeout=10,
             )
 
-            if result.returncode == 0:
-                return {"success": True, "path": output_path}
-            else:
-                return {"success": False, "error": "Screenshot capture failed"}
+            if capture.returncode != 0:
+                return {
+                    "success": False,
+                    "error": "Screenshot capture failed",
+                    "stderr": (capture.stderr or "").strip(),
+                }
+
+            pull = subprocess.run(
+                ["adb", "-s", self.adb_device, "pull", remote_tmp, local_output_path],
+                capture_output=True,
+                text=True,
+                timeout=20,
+            )
+
+            # Best effort cleanup of temporary Android-side screenshot file.
+            subprocess.run(
+                ["adb", "-s", self.adb_device, "shell", "rm", "-f", remote_tmp],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+
+            if pull.returncode != 0:
+                return {
+                    "success": False,
+                    "error": "Screenshot pull failed",
+                    "stderr": (pull.stderr or "").strip(),
+                    "path": local_output_path,
+                }
+
+            size_bytes = os.path.getsize(local_output_path) if os.path.exists(local_output_path) else 0
+            return {"success": True, "path": local_output_path, "size_bytes": size_bytes}
 
         except Exception as e:
             logger.error(f"Screenshot error: {e}")
